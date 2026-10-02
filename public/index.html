@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Forest Relic Hunt</title>
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="hud" class="hidden">
+  <div id="hpwrap"><div id="hpbar"></div><span id="hptxt"></span></div>
+  <div id="relics">Relics <b id="relicn">0</b>/5</div>
+  <div id="objective"></div>
+  <div id="compass"><div id="arrow"></div></div>
+  <div id="kills">Defeated <b id="killn">0</b></div>
+  <div id="toast"></div>
+  <div id="help">WASD move · Mouse look (click to capture) · Space jump · LMB / F attack</div>
+</div>
+
+<div id="menu">
+  <h1>Forest Relic Hunt</h1>
+  <p>Recover the 5 lost relics from the haunted forest, then escape through the portal.</p>
+  <div id="heroes"></div>
+  <p id="loading">Loading assets…</p>
+</div>
+
+<div id="end" class="hidden"><h2 id="endtitle"></h2><p id="endtext"></p><button id="again">Play again</button></div>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>

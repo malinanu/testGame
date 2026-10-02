@@ -12,8 +12,9 @@ const cors = {
 };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
 
-// New-style projects expose a secret key; legacy projects the service-role JWT. Either bypasses RLS.
-const serverKey = Deno.env.get('SUPABASE_SECRET_KEY') || Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+// Server key (bypasses RLS). ARENA_SECRET_KEY is an optional custom secret (dashboard secrets can't start
+// with SUPABASE_); otherwise use what the platform injects: the secret key or the legacy service-role JWT.
+const serverKey = Deno.env.get('ARENA_SECRET_KEY') || Deno.env.get('SUPABASE_SECRET_KEY') || Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const admin = createClient(Deno.env.get('SUPABASE_URL')!, serverKey, { auth: { persistSession: false } });
 const core = createCore(createSupabaseStore(admin));
 

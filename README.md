@@ -54,6 +54,12 @@ To share one world between players:
 3. Put the project URL and **publishable** key (`sb_publishable_…`, from the dashboard's **Connect** dialog or Project Settings → API Keys; called "anon" on older projects) in `public/arena/config.js`. Never put the secret or service-role key there. Then host `public/` anywhere static.
    Add `?offline` to the URL to force the local demo.
 
+**No CLI? Deploy from the dashboard instead:**
+1. **SQL Editor:** paste and run `supabase/migrations/20261002000000_arena.sql`.
+2. **Edge Functions → Deploy a new function → Via Editor:** name it `arena`, replace the code with the single-file bundle `dist/arena-function.ts` (rebuild it with `npm run bundle`), and deploy.
+3. In the function's settings, turn **off** "Verify JWT with legacy secret". The function checks each caller's session itself.
+4. Enable anonymous sign-ins (step 1 above).
+
 The browser never writes to the database. Every action goes to the `arena` Edge Function, which runs
 `public/arena/src/server-core.js` with the service role.
 

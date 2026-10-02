@@ -1,0 +1,29 @@
+// In-memory store implementing the server-core storage interface. With `persist` it backs the
+// browser's offline "local cloud" (localStorage); without it, it is used by the Node tests.
+export function createMemoryStore({ persist = null, clock = () => Date.now() } = {}) {
+  const db = persist?.load() || { profiles: {}, strongholds: {}, raids: {}, season: null };
+  const save = () => persist?.save(db);
+  const clone = o => (o == null ? o : JSON.parse(JSON.stringify(o)));
+  const profiles = () => Object.values(db.profiles);
+  return {
+    db,
+    now: clock,
+    newId: () => (globalThis.crypto?.randomUUID?.() || `id-${Math.random().toString(36).slice(2)}-${Date.now()}`),
+    async getProfile(id) { return clone(db.profiles[id]); },
+    async putProfile(p) { db.profiles[p.id] = clone(p); save(); },
+    async allProfiles() { return clone(profiles()); },
+    async bots() { return clone(profiles().filter(p => p.isBot)); },
+    async nearby(rating, limit) { return clone(profiles().sort((a, b) => Math.abs(a.rating - rating) - Math.abs(b.rating - rating)).slice(0, limit)); },
+    async top(limit) { return clone(profiles().sort((a, b) => b.rating - a.rating).slice(0, limit)); },
+    async rankOf(rating) { return profiles().filter(p => p.rating > rating).length; },
+    async getStronghold(owner) { return clone(db.strongholds[owner]); },
+    async putStronghold(s) { db.strongholds[s.owner] = clone(s); save(); },
+    async getRaid(id) { return clone(db.raids[id]); },
+    async putRaid(r) { db.raids[r.id] = clone(r); save(); },
+    async openRaidOf(attacker) { return clone(Object.values(db.raids).find(r => r.attacker === attacker && r.status === 'open')); },
+    async raidsAgainst(defender, limit) { return clone(Object.values(db.raids).filter(r => r.defender === defender && r.status === 'done').sort((a, b) => b.finishedAt - a.finishedAt).slice(0, limit)); },
+    async recentTargets(attacker, since) { return Object.values(db.raids).filter(r => r.attacker === attacker && r.createdAt >= since).map(r => r.defender); },
+    async getSeason() { return clone(db.season); },
+    async putSeason(s) { db.season = clone(s); save(); },
+  };
+}

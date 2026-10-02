@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wildwood Arena</title>
+<link rel="stylesheet" href="../tactics/tactics.css">
+<link rel="stylesheet" href="arena.css">
+<script type="importmap">
+{ "imports": { "three": "../vendor/three/three.module.js", "three/addons/": "../vendor/three/addons/" } }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="labels"></div>
+
+<!-- battle HUD (ids shared with tactics/src/controller.js) -->
+<div id="hud" class="hidden">
+  <div id="topbar"><b id="round">Round 1</b><span id="vs"></span></div>
+  <div id="banner"></div>
+  <div id="roster"></div>
+  <div id="unitpanel"><div id="uinfo"></div><div id="abils"></div></div>
+  <button id="endturn" class="btn gold">End Turn <kbd>⏎</kbd></button>
+  <button id="retreat" class="btn">Retreat</button>
+  <div id="tip"></div>
+  <div id="log"></div>
+  <div id="keys">Click unit · click tile to move · 1-5 abilities · Esc cancel · Tab next · Q/E rotate · WASD pan · wheel zoom · right-drag orbit</div>
+</div>
+
+<div id="toast"></div>
+
+<section id="screen-loading" class="screen active"><h1>Wildwood Arena</h1><p id="loadtxt">Raising the banners…</p></section>
+
+<section id="screen-login" class="screen">
+  <h1>Wildwood Arena</h1>
+  <p class="lede">Clash of Guilds. Build a forest stronghold, program its garrison, and raid rival guilds to climb the seasonal leagues.</p>
+  <form id="loginform" class="row">
+    <input id="name" maxlength="20" placeholder="Your guild name" autocomplete="off">
+    <button class="btn gold big">Found your guild</button>
+  </form>
+  <p id="loginerr" class="err"></p>
+  <p class="mode" id="modenote"></p>
+  <a class="alt" href="../tactics/">Single-player: Wildwood Tactics →</a>
+</section>
+
+<section id="screen-home" class="screen free">
+  <header id="bar"></header>
+  <nav id="nav">
+    <button class="btn gold big" data-go="raid">⚔ Raid</button>
+    <button class="btn" data-tab="base">Stronghold</button>
+    <button class="btn" data-tab="armory">Armory</button>
+    <button class="btn" data-tab="alchemy">Alchemy</button>
+    <button class="btn" data-tab="ranks">Leaderboard</button>
+  </nav>
+  <aside id="panel"></aside>
+</section>
+
+<section id="screen-builder" class="screen free">
+  <header class="bpanel top"><b>Stronghold editor</b> <span id="budget"></span><span class="sp"></span>
+    <button id="b-cancel" class="btn">Cancel</button><button id="b-save" class="btn gold">Save &amp; upload</button></header>
+  <aside class="bpanel left"><h3>Terrain</h3><div id="palette"></div><p class="hint">Click or drag on the board to paint. Rows 1–2 are the raiders' landing zone and must stay open.</p></aside>
+  <aside class="bpanel right"><h3>Garrison</h3><div id="garrison"></div><div id="berrs" class="err"></div></aside>
+</section>
+
+<section id="screen-raid" class="screen">
+  <h2>Raid a rival stronghold</h2>
+  <div class="raidgrid">
+    <div class="rcol"><h3>Your raiding party <small id="partycount"></small></h3><div id="partypick" class="cards small"></div>
+      <h3>Bring consumables</h3><div id="carry"></div></div>
+    <div class="rcol"><h3>Scouted target</h3><div id="target" class="card wide"></div>
+      <div class="row"><button id="r-scout" class="btn">Scout another</button><button id="r-attack" class="btn gold big">Attack!</button></div>
+      <button id="r-back" class="btn">← Back</button></div>
+  </div>
+</section>
+
+<section id="screen-result" class="screen">
+  <h1 id="restitle"></h1>
+  <p class="lede" id="restext"></p>
+  <div id="resgrid" class="row"></div>
+  <button id="res-home" class="btn gold big">Return to your stronghold</button>
+</section>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>

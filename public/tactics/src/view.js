@@ -229,6 +229,11 @@ export class View {
     tw(u.x, u.y, actor.root.position);
     actor.root.rotation.y = u.side === 'player' ? 0 : Math.PI;
     actor.root.add(ring);
+    if (u.auraColor) { // cosmetic seasonal aura (Arena)
+      uv.aura = new THREE.Mesh(new THREE.RingGeometry(0.82, 1.2, 40).rotateX(-Math.PI / 2),
+        new THREE.MeshBasicMaterial({ color: u.auraColor, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
+      uv.aura.position.y = 0.07; actor.root.add(uv.aura);
+    }
     this.scene.add(actor.root);
     this.units.set(u.id, uv);
     this.equip(uv);
@@ -262,6 +267,7 @@ export class View {
     if (u.stun > 0 || u.stunned) st.push('<b class="stun">STUN</b>');
     if (u.cls === 'fighter') st.push(`<b class="stance">${u.stance === 'defense' ? 'DEF' : 'OFF'}</b>`);
     if (u.elite) st.push('<b class="elite">ELITE</b>');
+    if (u.tierColor) st.push(`<b style="color:${u.tierColor}">◆</b>`);
     uv.label.querySelector('.st').innerHTML = st.join('');
     uv.label.classList.toggle('done', u.side === 'player' && u.moved && u.acted);
     uv.label.classList.toggle('sel', selected);
@@ -587,7 +593,10 @@ export class View {
     const done = [];
     for (const tw of this.tweens) { tw.t += dt; const k = Math.min(1, tw.t / tw.dur); tw.fn(k); if (k >= 1) done.push(tw); }
     if (done.length) { this.tweens = this.tweens.filter(t => !done.includes(t)); done.forEach(t => t.res()); }
-    for (const uv of this.units.values()) uv.actor.update(dt);
+    for (const uv of this.units.values()) {
+      uv.actor.update(dt);
+      if (uv.aura) { const k = 1 + Math.sin(time * 3 + uv.u.id) * 0.06; uv.aura.scale.set(k, 1, k); uv.aura.material.opacity = uv.u.alive ? 0.5 : 0; }
+    }
     for (const a of this.extraActors) a.update(dt);
     // fire flicker
     for (const f of this.fires.values()) for (const c of f.children) if (c.userData.ph != null) { const s = 0.8 + Math.sin(time * 9 + c.userData.ph) * 0.25; c.scale.set(s, s * (1 + Math.sin(time * 13 + c.userData.ph) * 0.2), s); }

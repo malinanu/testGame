@@ -1,0 +1,62 @@
+.screen.free { background: none; pointer-events: none; justify-content: flex-start; align-items: stretch; padding: 0; }
+.screen.free > * { pointer-events: auto; }
+input#name { font: 600 18px inherit; font-family: inherit; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--line); background: #0006; color: #fff; min-width: 240px; }
+.err { color: #ff8a8a; min-height: 1.2em; font-size: 13px; }
+.mode { font-size: 12px; opacity: .7; }
+#toast { position: fixed; top: 70px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--gold); color: #fff; padding: 10px 18px; border-radius: 12px; z-index: 50; opacity: 0; transition: .3s; pointer-events: none; text-align: center; max-width: 90vw; }
+#toast.on { opacity: 1; }
+
+/* home */
+#bar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 16px; font-size: 14px; }
+#bar .who { font-size: 18px; font-weight: 700; color: var(--gold); }
+#bar .chip { padding: 3px 10px; border-radius: 12px; font-weight: 700; color: #13221b; }
+#bar .res b { color: var(--gold); }
+#bar .sp { flex: 1; }
+#nav { position: absolute; left: 16px; top: 70px; display: flex; flex-direction: column; gap: 8px; width: 170px; }
+#nav .btn.on { border-color: var(--gold); background: #ffd54a26; }
+#panel { position: absolute; right: 16px; top: 70px; bottom: 16px; width: min(440px, calc(100vw - 220px)); overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; text-align: left; }
+#panel h3 { margin: 4px 0 8px; color: var(--gold); }
+#panel .item { display: flex; gap: 10px; align-items: center; justify-content: space-between; border-bottom: 1px solid #ffffff14; padding: 8px 0; font-size: 13px; }
+#panel .item .nm { font-weight: 700; font-size: 14px; }
+#panel .item small { display: block; opacity: .75; }
+#panel table { width: 100%; border-collapse: collapse; font-size: 13px; }
+#panel td, #panel th { padding: 5px 4px; border-bottom: 1px solid #ffffff12; text-align: left; }
+#panel tr.me td { color: var(--gold); font-weight: 700; }
+.tier { font-weight: 700; }
+.log li { font-size: 13px; margin: 4px 0; } .log .won { color: var(--green); } .log .lost { color: #ff8a8a; }
+.stat { display: inline-block; margin-right: 12px; }
+
+/* builder */
+.bpanel { position: absolute; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; text-align: left; font-size: 13px; }
+.bpanel.top { top: 10px; left: 50%; transform: translateX(-50%); display: flex; gap: 10px; align-items: center; white-space: nowrap; }
+.bpanel.top .sp { width: 16px; }
+.bpanel.left { left: 10px; top: 70px; width: 190px; }
+.bpanel.right { right: 10px; top: 70px; width: 260px; max-height: calc(100vh - 90px); overflow-y: auto; }
+.bpanel h3 { margin: 0 0 8px; color: var(--gold); font-size: 15px; }
+#palette .btn { display: flex; width: 100%; justify-content: space-between; margin: 3px 0; padding: 6px 9px; font-size: 13px; }
+#palette .btn.on { border-color: var(--gold); background: #ffd54a33; }
+#budget.over { color: #ff8a8a; }
+.gslot { border: 1px solid #ffffff1f; border-radius: 10px; padding: 7px; margin-bottom: 7px; }
+.gslot select { width: 100%; margin: 2px 0; background: #0006; color: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 4px; font: inherit; }
+.gslot .btn { width: 100%; padding: 4px; font-size: 12px; margin-top: 3px; }
+.gslot.placing { border-color: var(--gold); }
+.hint { opacity: .7; font-size: 12px; line-height: 1.4; }
+
+/* raid prep */
+.raidgrid { display: flex; gap: 22px; flex-wrap: wrap; justify-content: center; text-align: left; max-width: 1100px; }
+.rcol { flex: 1 1 420px; }
+.cards.small .card { width: 150px; padding: 9px; }
+.cards.small .card b.t { font-size: 16px; }
+.card.wide { width: 100%; cursor: default; min-height: 150px; }
+.card.wide:hover { transform: none; }
+#carry .item { display: flex; align-items: center; gap: 10px; margin: 6px 0; font-size: 14px; }
+#carry input { width: 60px; }
+#resgrid .card { cursor: default; text-align: center; width: 150px; }
+#resgrid .card b.t { font-size: 26px; }
+#retreat { position: absolute; left: 14px; bottom: 14px; }
+@media (max-width: 760px) {
+  #nav { flex-direction: row; flex-wrap: wrap; width: auto; right: 16px; }
+  #panel { top: 170px; width: auto; left: 16px; }
+  .bpanel.left, .bpanel.right { position: static; width: auto; margin: 6px; }
+  .bpanel.top { position: static; transform: none; flex-wrap: wrap; white-space: normal; }
+}

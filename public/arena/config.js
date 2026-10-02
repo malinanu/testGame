@@ -3,5 +3,5 @@
 // service-role key here. Leave the key blank to play the offline demo (local "cloud" in this browser).
 export const CONFIG = {
   supabaseUrl: 'https://xsjgycaytzqtnvesowdh.supabase.co',
-  supabasePublishableKey: '',
+  supabasePublishableKey: 'sb_publishable_6qIpWPDplvp-ro-Dpl0QUw_VInXxSjT',
 };

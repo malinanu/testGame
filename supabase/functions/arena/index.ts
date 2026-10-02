@@ -12,7 +12,9 @@ const cors = {
 };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
 
-const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!, { auth: { persistSession: false } });
+// New-style projects expose a secret key; legacy projects the service-role JWT. Either bypasses RLS.
+const serverKey = Deno.env.get('SUPABASE_SECRET_KEY') || Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+const admin = createClient(Deno.env.get('SUPABASE_URL')!, serverKey, { auth: { persistSession: false } });
 const core = createCore(createSupabaseStore(admin));
 
 Deno.serve(async (req) => {

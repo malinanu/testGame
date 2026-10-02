@@ -9,13 +9,13 @@ const LOCAL_DB = 'wildwood-arena-db', LOCAL_UID = 'wildwood-arena-uid';
 
 export async function createApi() {
   const params = new URLSearchParams(location.search);
-  if (CONFIG.supabaseUrl && CONFIG.supabaseAnonKey && !params.has('offline')) return cloudApi();
+  if (CONFIG.supabaseUrl && CONFIG.supabasePublishableKey && !params.has('offline')) return cloudApi();
   return localApi();
 }
 
 async function cloudApi() {
   const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm');
-  const sb = createClient(CONFIG.supabaseUrl, CONFIG.supabaseAnonKey);
+  const sb = createClient(CONFIG.supabaseUrl, CONFIG.supabasePublishableKey);
   return {
     mode: 'cloud',
     async call(action, payload = {}) {

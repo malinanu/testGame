@@ -2,5 +2,6 @@
 project_id = "xsjgycaytzqtnvesowdh"
 
 [functions.arena]
-# The function checks the JWT itself (anonymous sessions are allowed).
-verify_jwt = true
+# The function validates the caller's session itself (admin.auth.getUser), so the gateway check is off;
+# this also works with the newer asymmetric JWT signing keys. Anonymous sessions are allowed.
+verify_jwt = false

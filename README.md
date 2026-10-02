@@ -43,7 +43,7 @@ An asynchronous multiplayer game built on the Tactics engine.
 ### Playing online (Supabase)
 Without keys, `/arena/` runs the same server logic inside your browser (a "local cloud" with 8 NPC guilds), which is good for trying it out.
 To share one world between players:
-1. Create a Supabase project. Under **Auth → Providers**, enable **Anonymous sign-ins**. Players are identified by a guild name plus a session kept in their browser, with no passwords.
+1. Create a Supabase project. Under **Authentication → Sign In / Providers**, enable **Allow anonymous sign-ins**. Players are identified by a guild name plus a session kept in their browser, with no passwords.
 2. Install the [Supabase CLI](https://supabase.com/docs/guides/cli), then from this repo run:
    ```
    supabase link --project-ref <your-project-ref>
@@ -51,7 +51,7 @@ To share one world between players:
    npm run sync                          # copies the shared game modules into supabase/functions/_shared
    supabase functions deploy arena
    ```
-3. Put the project URL and **anon** key in `public/arena/config.js`. Never put the service-role key there. Then host `public/` anywhere static.
+3. Put the project URL and **publishable** key (`sb_publishable_…`, from the dashboard's **Connect** dialog or Project Settings → API Keys; called "anon" on older projects) in `public/arena/config.js`. Never put the secret or service-role key there. Then host `public/` anywhere static.
    Add `?offline` to the URL to force the local demo.
 
 The browser never writes to the database. Every action goes to the `arena` Edge Function, which runs

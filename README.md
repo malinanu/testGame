@@ -1,7 +1,8 @@
 # KayKit Forest Games
 
-Three browser games built with Three.js and the free KayKit asset packs
-(*Adventurers 2.0* and *Forest Nature Pack 1.0*, CC0 by Kay Lousberg).
+Four browser games built with Three.js and free CC0 asset packs: KayKit *Adventurers 2.0*, *Forest Nature Pack 1.0* and
+*Fantasy Weapons Bits 1.0* (Kay Lousberg), plus the *Brackeys VFX bundle* (particles by Picster and Kenney, flipbooks by
+Thomas Iché, sprite sheets by CodeManu).
 
 ```
 cd public && python3 -m http.server 8123   # or: npx serve public
@@ -9,9 +10,49 @@ cd public && python3 -m http.server 8123   # or: npx serve public
 
 | URL | Game |
 |---|---|
+| http://localhost:8123/chess/ | **Wizard's Chess**, a living 3D chess set where pieces fight to capture (vs AI, two players, AI vs AI) |
 | http://localhost:8123/arena/ | **Wildwood Arena: Clash of Guilds**, an online build-and-raid tactics game (Supabase backend, offline demo built in) |
 | http://localhost:8123/tactics/ | **Wildwood Tactics**, a turn-based tactics roguelite |
 | http://localhost:8123/ | **Forest Relic Hunt**, a third-person action game (`?hero=Mage` skips the menu) |
+
+## Wizard's Chess (`public/chess/`)
+Full-rules chess on a cracked stone board in a torch-lit hall.
+
+**The pieces:**
+| Piece | Character | How it captures |
+|---|---|---|
+| King | Crowned Knight | Sword strike |
+| Queen | Mage | Lightning from her staff |
+| Rook | Living stone tower with glowing eyes | Topples onto its target |
+| Bishop | Archer | Shoots an arrow |
+| Knight | Barbarian | Leaps its L-move and smashes the target |
+| Pawn | Spear-carrying Rogue | Spear thrust |
+
+Captured pieces shatter into rubble and dust, then lie in a graveyard beside the board.
+
+**Atmosphere:**
+- Check makes the king's square pulse red.
+- On checkmate the losing king falls and his crown rolls away, while the winners cheer under fireworks.
+- Floor fog, drifting magic motes and flickering torches fill the hall.
+- An optional cinematic camera pushes in on each capture.
+- Synthesized sound effects play throughout.
+
+**Rules:** castling, en passant, promotion with a piece picker, check, checkmate, stalemate, the 50-move rule, threefold repetition and insufficient material.
+
+**AI:** alpha-beta search with quiescence search and piece-square tables, running in a Web Worker so animations stay smooth. Three levels: Apprentice, Wizard and Archmage.
+
+**Controls:**
+- Click a piece, then a glowing square.
+- Right-drag to orbit, the wheel to zoom, Q/E to rotate the view.
+- U undoes, F flips the board.
+
+**Code:**
+- `chess/src/chess.js`: the rules engine, verified against the standard perft node counts on 5 positions
+- `ai.js` / `ai-worker.js`: the AI
+- `scene.js`: the hall, the pieces and the move choreography
+- `vfx.js`: sprite sheets, particles, debris, lightning and screen shake
+- `sfx.js`: the sound synthesizer
+- `main.js`: game flow and HUD
 
 ## Wildwood Arena: Clash of Guilds (`public/arena/`)
 An asynchronous multiplayer game built on the Tactics engine.
@@ -73,6 +114,7 @@ The browser never writes to the database. Every action goes to the `arena` Edge 
 
 ### Tests
 Run `npm test`. It covers:
+- Chess perft, rules edge cases, SAN notation and AI sanity checks (mate-in-1, legal self-play)
 - Engine replay determinism, tampered-log rejection, behaviors, consumables and the round limit
 - The arena server core: economy, validation, daily streak, harvest and craft, upgrades, raids with server replay, forged logs, PvP Elo, simulated defenses, season rollover
 - The Supabase store, against an in-memory fake of supabase-js

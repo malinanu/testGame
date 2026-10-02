@@ -86,11 +86,11 @@ console.log('ok forged logs rejected');
 
 // player vs player: u2 raids u1 and u1's rating moves too
 await ok('u2', 'register', { name: 'Rival' });
-const r1 = (await store.getProfile('u1')).rating;
+const { rating: r1, defWins: dw1 } = await store.getProfile('u1'); // earlier simulated NPC raids may already count
 const s3 = await ok('u2', 'startRaid', { defenderId: 'u1', party: ['fighter', 'knight', 'ranger', 'rogue'] });
 await ok('u2', 'finishRaid', { raidId: s3.raid.id, actions: [{ t: 'e' }] }); // retreats after one turn
 const u1 = await store.getProfile('u1');
-assert.ok(u1.rating > r1 && u1.defWins === 1, 'defender gains Elo and a defense win');
+assert.ok(u1.rating > r1 && u1.defWins === dw1 + 1, 'defender gains Elo and a defense win');
 const lb = await ok('u1', 'leaderboard');
 assert.ok(lb.top.length >= BOT_COUNT + 2 && lb.me.rank >= 1);
 console.log('ok PvP defense + leaderboard');

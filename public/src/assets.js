@@ -14,14 +14,16 @@ export const FOREST = [
 ];
 
 /** Loads every model + animation clip the game uses. Returns plain lookup tables. */
-export async function loadAssets() {
+export async function loadAssets({ base = '', props = PROPS, forest = FOREST, onProgress } = {}) {
   const a = { chars: {}, props: {}, forest: {}, clips: {} };
   const jobs = [];
-  for (const n of CHARACTERS) jobs.push(load(`assets/chars/${n}.glb`).then(g => a.chars[n] = g.scene));
-  for (const n of PROPS) jobs.push(load(`assets/props/${n}.gltf`).then(g => a.props[n] = g.scene));
-  for (const n of FOREST) jobs.push(load(`assets/forest/${n}_Color1.gltf`).then(g => a.forest[n] = g.scene));
+  let done = 0;
+  const track = p => { jobs.push(p.then(() => onProgress?.(++done, jobs.length))); };
+  for (const n of CHARACTERS) track(load(`${base}assets/chars/${n}.glb`).then(g => a.chars[n] = g.scene));
+  for (const n of props) track(load(`${base}assets/props/${n}.gltf`).then(g => a.props[n] = g.scene));
+  for (const n of forest) track(load(`${base}assets/forest/${n}_Color1.gltf`).then(g => a.forest[n] = g.scene));
   for (const f of ['General', 'MovementBasic'])
-    jobs.push(load(`assets/anim/Rig_Medium_${f}.glb`).then(g => g.animations.forEach(c => a.clips[c.name] = c)));
+    track(load(`${base}assets/anim/Rig_Medium_${f}.glb`).then(g => g.animations.forEach(c => a.clips[c.name] = c)));
   await Promise.all(jobs);
   return a;
 }

@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wildwood Tactics</title>
+<link rel="stylesheet" href="tactics.css">
+<script type="importmap">
+{ "imports": { "three": "../vendor/three/three.module.js", "three/addons/": "../vendor/three/addons/" } }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="labels"></div>
+
+<div id="hud" class="hidden">
+  <div id="topbar"><b id="round">Round 1</b><span id="vs"></span></div>
+  <div id="banner"></div>
+  <div id="roster"></div>
+  <div id="unitpanel"><div id="uinfo"></div><div id="abils"></div></div>
+  <button id="endturn" class="btn gold">End Turn <kbd>⏎</kbd></button>
+  <div id="tip"></div>
+  <div id="log"></div>
+  <div id="keys">Click unit · click tile to move · 1-4 abilities · Esc cancel · Tab next · Q/E rotate · WASD pan · wheel zoom · right-drag orbit</div>
+</div>
+
+<section id="screen-loading" class="screen active"><h1>Wildwood Tactics</h1><p id="loadtxt">Gathering the guilds…</p></section>
+
+<section id="screen-title" class="screen">
+  <h1>Wildwood Tactics</h1>
+  <p class="lede">The mercenary guilds have turned on each other in the Wildwood. Draft a party of four, outfight rival squads among the
+    rocks and trees, and break the Hollow Crown.</p>
+  <div class="row">
+    <button id="btn-new" class="btn gold big">New Run</button>
+    <button id="btn-continue" class="btn big">Continue</button>
+  </div>
+  <details class="howto"><summary>How to play</summary>
+    <ul>
+      <li>Each hero can <b>move</b> once and take one <b>action</b> per turn, in either order. Then the enemy squad moves.</li>
+      <li><b>Rock pillars</b> and <b>leafy trees</b> block line of sight. <b>Boulders</b> and trunks next to a target give <b>half cover</b> (−40% dmg, −15% hit).</li>
+      <li><b>Bushes</b> hide Rogues; <b>corrupted purple trees</b> lash anyone ending a turn beside them; <b>fire</b> burns whoever walks through.</li>
+      <li>Wounds carry between fights. Fallen heroes stay down unless you revive them with a potion at a campfire.</li>
+    </ul>
+  </details>
+  <a class="alt" href="../index.html">Play Forest Relic Hunt (action mode) →</a>
+</section>
+
+<section id="screen-draft" class="screen">
+  <h2>Draft your party <small id="draftcount">0 / 4</small></h2>
+  <div id="draftcards" class="cards"></div>
+  <button id="btn-begin" class="btn gold big" disabled>Enter the Wildwood</button>
+</section>
+
+<section id="screen-map" class="screen">
+  <div class="mapwrap">
+    <div class="maphead"><h2>The Wildwood</h2><div id="res"></div></div>
+    <svg id="mapsvg"></svg>
+    <div id="nodetip"></div>
+  </div>
+  <div id="partybar"></div>
+</section>
+
+<section id="screen-loot" class="screen">
+  <h2 id="loottitle">Spoils of battle</h2>
+  <p class="lede" id="lootsub">Choose one.</p>
+  <div id="lootcards" class="cards"></div>
+</section>
+
+<section id="screen-camp" class="screen bottom">
+  <div class="camppanel">
+    <h2>Campfire <small id="campres"></small></h2>
+    <div id="camplist"></div>
+    <div class="row"><button id="btn-rest" class="btn">Rest by the fire (+20% all)</button><button id="btn-breakcamp" class="btn gold">Break camp →</button></div>
+  </div>
+</section>
+
+<section id="screen-end" class="screen">
+  <h1 id="endtitle"></h1>
+  <p class="lede" id="endtext"></p>
+  <button id="btn-again" class="btn gold big">New Run</button>
+</section>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>

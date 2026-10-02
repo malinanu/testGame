@@ -1,0 +1,373 @@
+// Turn-based battle rules and AI. Rendering goes through `view` (every method returns a Promise),
+// so the same code runs headless with NullView for simulations/tests.
+import { T, TILE, ABIL, CLASSES, FIRE_DMG, LASH_DMG, FIRE_ROUNDS, gearMods } from './data.js';
+import { reachable, pathTo, lineOfSight, halfCover, distanceField, dist, N4, N8, rng } from './grid.js';
+
+let nextId = 1;
+
+/** Build a battle unit from a hero record ({cls, hp, gear}). */
+export function makeUnit(hero, side, { hpMult = 1, dmgBonus = 0, tint = null, elite = false } = {}) {
+  const c = CLASSES[hero.cls], mods = gearMods(hero.gear);
+  if (dmgBonus) mods.dmg = (mods.dmg || 0) + dmgBonus;
+  const maxHp = Math.round((c.hp + (mods.hp || 0)) * hpMult);
+  return {
+    id: nextId++, side, cls: hero.cls, name: c.name, hero, elite, tint,
+    hp: hero.hp == null ? maxHp : Math.min(hero.hp, maxHp), maxHp,
+    move: c.move + (mods.move || 0), armor: (c.armor || 0) + (mods.armor || 0), mods, gear: hero.gear,
+    x: 0, y: 0, cd: {}, stun: 0, hidden: false, stance: 'offense',
+    moved: false, acted: false, stanced: false, attacked: false, alive: true,
+  };
+}
+
+export const NullView = new Proxy({}, { get: () => () => Promise.resolve() });
+
+export class Battle {
+  constructor({ grid, units, view = NullView, seed = 1, onEnd = () => {} }) {
+    this.g = grid; this.units = units; this.view = view; this.rand = rng(seed); this.onEnd = onEnd;
+    this.round = 1; this.phase = 'player'; this.over = false; this.result = null; this.log = [];
+    this.startPhase('player');
+  }
+
+  say(msg) { this.log.push(msg); this.view.log?.(msg); }
+  unitAt(x, y) { return this.units.find(u => u.alive && u.x === x && u.y === y); }
+  alive(side) { return this.units.filter(u => u.alive && u.side === side); }
+  foes(u) { return this.units.filter(o => o.alive && o.side !== u.side); }
+  abilities(u) { return CLASSES[u.cls].abilities; }
+  moveBudget(u) { return u.move; }
+  reach(u) { return reachable(this.g, this.units, u, this.moveBudget(u)); }
+
+  canUse(u, id) {
+    const a = ABIL[id];
+    if (!u.alive || this.over) return false;
+    if (a.free) return !u.stanced;
+    return !u.acted && !(u.cd[id] > 0);
+  }
+
+  /** Valid targets for an ability from (fx, fy). Each target: {x, y, unit?, tree?} */
+  targets(u, id, fx = u.x, fy = u.y) {
+    const a = ABIL[id], g = this.g, out = [];
+    if (a.kind === 'attack') {
+      const range = a.range + (a.ranged ? (u.mods.range || 0) : 0);
+      for (const e of this.foes(u)) {
+        const d = dist(fx, fy, e.x, e.y);
+        if (d < 1 || d > range || (e.hidden && d > 1)) continue;
+        if (a.ranged && !lineOfSight(g, fx, fy, e.x, e.y)) continue;
+        out.push({ x: e.x, y: e.y, unit: e });
+      }
+      if (a.fell) for (const [dx, dy] of N8) {
+        const x = fx + dx, y = fy + dy;
+        if (g.in(x, y) && g.def(x, y).fell) out.push({ x, y, tree: true });
+      }
+    } else if (a.kind === 'aoe') {
+      for (let y = 0; y < g.h; y++) for (let x = 0; x < g.w; x++) {
+        const d = dist(fx, fy, x, y);
+        if (d < 1 || d > a.range) continue;
+        if (!lineOfSight(g, fx, fy, x, y)) continue;
+        out.push({ x, y });
+      }
+    } else if (a.kind === 'heal') {
+      for (const o of this.units) if (o.alive && o.side === u.side && o.hp < o.maxHp && dist(fx, fy, o.x, o.y) <= a.range) out.push({ x: o.x, y: o.y, unit: o });
+    } else out.push({ x: fx, y: fy, unit: u });
+    return out;
+  }
+
+  /** Tiles affected by an ability aimed at (tx, ty). */
+  area(u, id, tx, ty, fx = u.x, fy = u.y) {
+    const a = ABIL[id];
+    if (a.kind === 'aoe') return N8.concat([[0, 0]]).map(([dx, dy]) => [tx + dx, ty + dy]).filter(([x, y]) => this.g.in(x, y));
+    if (a.kind === 'cleave') return N8.map(([dx, dy]) => [fx + dx, fy + dy]).filter(([x, y]) => this.g.in(x, y));
+    return [[tx, ty]];
+  }
+
+  armorOf(t) { return t.armor + (t.cls === 'fighter' && t.stance === 'defense' ? 2 : 0); }
+
+  /** Hit chance, damage and notes for an attack-type ability. */
+  preview(u, id, target, fx = u.x, fy = u.y) {
+    const a = ABIL[id], g = this.g, notes = [];
+    if (a.kind === 'heal') return { hit: 100, heal: a.amount + (u.mods.heal || 0), notes };
+    let dmg = a.dmg + (u.mods.dmg || 0) + (a.spell ? (u.mods.spell || 0) : 0);
+    let hit = a.acc ?? 100;
+    const d = target ? dist(fx, fy, target.x, target.y) : 0;
+    if (a.distScale) { const b = Math.floor(d * a.distScale); if (b) { dmg += b; notes.push(`+${b} range`); } }
+    if (a.stanceBonus && u.stance === 'offense') { dmg += 2; notes.push('Offense +2'); }
+    if (a.push) dmg += 0;
+    if (a.mult) dmg = Math.round(dmg * a.mult);
+    if (a.ranged) {
+      hit += u.mods.acc || 0;
+      if (u.cls === 'ranger' && g.isAdjTo(fx, fy, T.TREE)) { hit += 20; notes.push('Eagle Eye +20%'); }
+    }
+    let cover = false;
+    if (target && a.ranged && halfCover(g, fx, fy, target.x, target.y)) {
+      if (a.ignoreCover) notes.push('Ignores cover');
+      else { cover = true; dmg = Math.max(1, Math.round(dmg * 0.6)); hit -= 15; notes.push('Half cover'); }
+    }
+    const crit = u.hidden && a.kind === 'attack';
+    if (crit) { dmg *= 2; hit = 100; notes.push('Hidden: CRIT'); }
+    if (target?.unit) { const arm = this.armorOf(target.unit); if (arm) { dmg = Math.max(1, dmg - arm); notes.push(`Armor -${arm}`); } }
+    if (target?.tree) { hit = 100; notes.push('Fell tree'); }
+    return { hit: Math.max(5, Math.min(100, hit)), dmg, crit, cover, notes };
+  }
+
+  // ---------------------------------------------------------------- actions
+  async move(u, x, y) {
+    if (u.moved || this.over) return false;
+    const reach = this.reach(u), k = this.g.i(x, y), e = reach.get(k);
+    if (!e || !e.stop) return false;
+    const path = pathTo(this.g, reach, k);
+    u.moved = true;
+    if (path.length < 2) return true;
+    u.x = x; u.y = y;
+    if (u.hidden) u.hidden = false;
+    await this.view.walk(u, path);
+    const burns = path.slice(1).filter(([px, py]) => this.g.fire[this.g.i(px, py)]).length;
+    if (burns) { this.say(`${u.name} runs through fire.`); await this.damage(u, FIRE_DMG * burns, { src: 'fire' }); }
+    if (u.alive && u.cls === 'rogue' && this.g.get(x, y) === T.BUSH && !u.attacked) await this.hide(u);
+    return true;
+  }
+
+  async hide(u) { if (!u.hidden) { u.hidden = true; this.say(`${u.name} slips into the bush (Hidden).`); await this.view.status(u, 'Hidden'); } }
+
+  async use(u, id, tx, ty) {
+    const a = ABIL[id], g = this.g;
+    if (!this.canUse(u, id)) return false;
+    const tgt = this.targets(u, id).find(t => t.x === tx && t.y === ty);
+    if (!tgt) return false;
+    if (a.free) {
+      u.stanced = true; u.stance = u.stance === 'offense' ? 'defense' : 'offense';
+      this.say(`${u.name} switches to ${u.stance} stance.`);
+      await this.view.stance(u);
+      return true;
+    }
+    u.acted = true;
+    if (a.cd) u.cd[id] = a.cd;
+    const wasHidden = u.hidden;
+
+    if (a.kind === 'attack') {
+      u.attacked = true;
+      const p = this.preview(u, id, tgt);
+      await this.view.attack(u, tx, ty, a);
+      if (tgt.tree) { this.say(`${u.name} fells a tree.`); await this.fell(tx, ty); }
+      else if (this.rand() * 100 < p.hit) {
+        this.say(`${u.name} ${a.name} → ${tgt.unit.name}: ${p.dmg}${p.crit ? ' CRIT' : ''}`);
+        await this.damage(tgt.unit, p.dmg, { crit: p.crit });
+        if (a.push && tgt.unit.alive) await this.push(u, tgt.unit);
+      } else { this.say(`${u.name} ${a.name} misses ${tgt.unit.name}.`); await this.view.miss(tgt.unit); }
+    } else if (a.kind === 'cleave') {
+      u.attacked = true;
+      await this.view.attack(u, u.x, u.y, a);
+      const dmg = (a.dmg + (u.mods.dmg || 0)) * (wasHidden ? 2 : 1);
+      for (const [x, y] of this.area(u, id)) {
+        const o = this.unitAt(x, y);
+        if (o && o.side !== u.side) await this.damage(o, Math.max(1, dmg - this.armorOf(o)));
+        if (g.def(x, y).fell) await this.fell(x, y);
+      }
+      this.say(`${u.name} cleaves everything around.`);
+    } else if (a.kind === 'aoe') {
+      u.attacked = true;
+      await this.view.cast(u, tx, ty, a);
+      const tiles = this.area(u, id, tx, ty);
+      if (a.dmg) {
+        const dmg = a.dmg + (u.mods.spell || 0) + (u.mods.dmg || 0);
+        for (const [x, y] of tiles) { const o = this.unitAt(x, y); if (o) await this.damage(o, Math.max(1, dmg - this.armorOf(o))); }
+      }
+      if (a.ignite) {
+        let lit = 0;
+        for (const [x, y] of tiles) if (g.def(x, y).flammable) {
+          lit++; g.set(x, y, T.GROUND);
+          for (const [dx, dy] of [[0, 0], ...N4]) { const nx = x + dx, ny = y + dy; if (g.in(nx, ny) && !g.blocked(nx, ny)) g.fire[g.i(nx, ny)] = FIRE_ROUNDS; }
+          await this.view.ignite(x, y);
+        }
+        if (lit) { this.say(`${lit} tree${lit > 1 ? 's' : ''} burst into flames!`); await this.view.fire(); }
+      }
+      if (a.overgrow) {
+        for (const [x, y] of tiles) if (g.get(x, y) <= T.GRASS) { g.set(x, y, T.OVERGROWN); await this.view.retile(x, y); }
+        this.say(`${u.name} calls up grasping vines.`);
+      }
+    } else if (a.kind === 'heal') {
+      const p = this.preview(u, id, tgt);
+      await this.view.cast(u, tx, ty, a);
+      const t = tgt.unit, before = t.hp;
+      t.hp = Math.min(t.maxHp, t.hp + p.heal);
+      this.say(`${u.name} heals ${t.name} for ${t.hp - before}.`);
+      await this.view.heal(t, t.hp - before);
+    }
+    if (wasHidden && u.alive) { u.hidden = false; await this.view.status(u, ''); }
+    this.checkEnd();
+    return true;
+  }
+
+  async push(u, t) {
+    const dx = Math.sign(t.x - u.x), dy = Math.sign(t.y - u.y), nx = t.x + dx, ny = t.y + dy;
+    if (!this.g.in(nx, ny) || this.g.blocked(nx, ny) || this.unitAt(nx, ny)) {
+      t.stun = 1;
+      this.say(`${t.name} is slammed into an obstacle — Stunned!`);
+      await this.view.bump(t, dx, dy);
+      await this.damage(t, 2 + (u.mods.bash || 0), { note: 'Stunned!' });
+    } else {
+      t.x = nx; t.y = ny; t.hidden = false;
+      await this.view.slide(t, nx, ny);
+      if (this.g.fire[this.g.i(nx, ny)]) await this.damage(t, FIRE_DMG, { src: 'fire' });
+    }
+  }
+
+  async fell(x, y) { this.g.set(x, y, T.GROUND); await this.view.fell(x, y); }
+
+  async damage(t, n, opts = {}) {
+    if (!t.alive) return;
+    t.hp = Math.max(0, t.hp - n);
+    await this.view.hit(t, n, opts);
+    if (t.hp <= 0) { t.alive = false; t.hidden = false; this.say(`${t.name} falls!`); await this.view.death(t); }
+    this.checkEnd();
+  }
+
+  checkEnd() {
+    if (this.over) return;
+    const p = this.alive('player').length, e = this.alive('enemy').length;
+    if (!p || !e) { this.over = true; this.result = p ? 'win' : 'lose'; this.phase = 'over'; this.onEnd(this.result); }
+  }
+
+  // ---------------------------------------------------------------- turn flow
+  startPhase(side) {
+    this.phase = side;
+    for (const u of this.units) {
+      if (u.side !== side || !u.alive) continue;
+      u.moved = u.acted = u.stanced = u.attacked = false;
+      for (const k in u.cd) if (u.cd[k] > 0) u.cd[k]--;
+      if (u.stun > 0) { u.stun--; u.moved = u.acted = true; u.stunned = true; } else u.stunned = false;
+    }
+  }
+
+  async endOfTurn(side) {
+    const g = this.g;
+    for (const u of this.alive(side)) {
+      if (this.over) return;
+      if (g.fire[g.i(u.x, u.y)]) { this.say(`${u.name} burns.`); await this.damage(u, FIRE_DMG, { src: 'fire' }); }
+      for (const [dx, dy] of N8) {
+        const x = u.x + dx, y = u.y + dy;
+        if (!u.alive || !g.in(x, y) || g.get(x, y) !== T.CORRUPT) continue;
+        this.say(`A corrupted tree lashes ${u.name}!`);
+        await this.view.lash(x, y, u);
+        await this.damage(u, LASH_DMG, { src: 'tree' });
+      }
+      if (u.alive && u.cls === 'rogue' && g.get(u.x, u.y) === T.BUSH && !u.attacked) await this.hide(u);
+    }
+  }
+
+  /** Called when the player presses End Turn: resolves the enemy phase and returns control. */
+  async endPlayerTurn() {
+    if (this.phase !== 'player' || this.over) return;
+    await this.endOfTurn('player');
+    if (this.over) return;
+    this.startPhase('enemy');
+    await this.view.banner?.('Enemy Turn');
+    await this.runAI('enemy');
+    if (this.over) return;
+    await this.endOfTurn('enemy');
+    if (this.over) return;
+    let changed = false;
+    for (let i = 0; i < this.g.fire.length; i++) if (this.g.fire[i]) { this.g.fire[i]--; changed = true; }
+    if (changed) await this.view.fire();
+    this.round++;
+    this.startPhase('player');
+    await this.view.banner?.(`Round ${this.round}`);
+  }
+
+  async runAI(side) {
+    const order = this.alive(side).sort((a, b) => (CLASSES[a.cls].prefer - CLASSES[b.cls].prefer));
+    for (const u of order) {
+      if (this.over) return;
+      if (!u.alive || (u.moved && u.acted)) continue;
+      await this.aiTurn(u);
+      await this.view.wait?.(0.15);
+    }
+  }
+
+  // ---------------------------------------------------------------- AI
+  async aiTurn(u) {
+    if (u.cls === 'fighter') {
+      const want = u.hp < u.maxHp * 0.45 ? 'defense' : 'offense';
+      if (u.stance !== want && this.canUse(u, 'stance')) await this.use(u, 'stance', u.x, u.y);
+    }
+    const plan = this.plan(u);
+    if (!u.moved && plan.move) await this.move(u, plan.move[0], plan.move[1]);
+    if (!u.alive || this.over || !plan.act) return;
+    const { id, x, y } = plan.act;
+    if (!(await this.use(u, id, x, y))) {
+      // target moved/died mid-plan: take the best action from where we stand
+      const alt = this.bestAction(u, u.x, u.y);
+      if (alt.act) await this.use(u, alt.act.id, alt.act.x, alt.act.y);
+    }
+  }
+
+  scoreAction(u, id, t, fx, fy) {
+    const a = ABIL[id];
+    if (a.kind === 'attack') {
+      if (t.tree) return this.g.get(t.x, t.y) === T.CORRUPT ? 1.5 : 0.1;
+      const p = this.preview(u, id, t, fx, fy), ev = p.hit / 100 * p.dmg;
+      return ev + (p.dmg >= t.unit.hp ? 6 * p.hit / 100 : 0) + (a.push ? 1 : 0);
+    }
+    if (a.kind === 'heal') {
+      const miss = t.unit.maxHp - t.unit.hp, amt = a.amount + (u.mods.heal || 0);
+      return miss >= 4 ? Math.min(miss, amt) * 1.3 : 0;
+    }
+    let s = 0;
+    const tiles = a.kind === 'cleave' ? this.area(u, id, 0, 0, fx, fy) : this.area(u, id, t.x, t.y, fx, fy);
+    for (const [x, y] of tiles) {
+      const o = this.unitAt(x, y);
+      const here = o && o !== u ? o : (x === fx && y === fy ? u : null);
+      if (a.dmg && here) {
+        const dmg = Math.max(1, a.dmg + (u.mods.dmg || 0) + (a.spell ? (u.mods.spell || 0) : 0) - this.armorOf(here));
+        if (here.side !== u.side) s += dmg + (dmg >= here.hp ? 5 : 0); else s -= dmg * 2;
+      }
+      if (a.overgrow && this.g.get(x, y) <= T.GRASS) {
+        if (o && o.side !== u.side) s += 0.6;
+        s += this.foes(u).some(f => dist(f.x, f.y, x, y) <= 2) ? 0.15 : 0;
+      }
+      if (a.ignite && this.g.def(x, y).flammable) s += this.foes(u).some(f => dist(f.x, f.y, x, y) <= 1) ? 2 : 0.2;
+    }
+    return a.kind === 'cleave' && s < 3 ? s * 0.5 : s;
+  }
+
+  bestAction(u, fx, fy) {
+    let best = { score: 0, act: null };
+    if (u.acted) return best;
+    for (const id of this.abilities(u)) {
+      if (ABIL[id].free || !this.canUse(u, id)) continue;
+      for (const t of this.targets(u, id, fx, fy)) {
+        const s = this.scoreAction(u, id, t, fx, fy);
+        if (s > best.score) best = { score: s, act: { id, x: t.x, y: t.y } };
+      }
+    }
+    return best;
+  }
+
+  plan(u) {
+    const g = this.g, foes = this.foes(u);
+    const field = distanceField(g, foes.map(f => [f.x, f.y]));
+    const pref = CLASSES[u.cls].prefer;
+    const reach = u.moved ? new Map([[g.i(u.x, u.y), { c: 0, stop: true }]]) : this.reach(u);
+    const rangedFoes = foes.filter(f => this.abilities(f).some(id => ABIL[id].ranged));
+    let best = { score: -1e9 };
+    for (const [k, e] of reach) {
+      if (!e.stop) continue;
+      const [x, y] = g.xy(k);
+      let pos = -e.c * 0.02;
+      if (g.fire[k]) pos -= 7;
+      if (e.c) pos -= 3 * pathTo(g, reach, k).slice(1, -1).filter(([px, py]) => g.fire[g.i(px, py)]).length;
+      for (const [dx, dy] of N8) if (g.in(x + dx, y + dy) && g.get(x + dx, y + dy) === T.CORRUPT) pos -= 4;
+      if (u.cls === 'rogue' && g.get(x, y) === T.BUSH) pos += 2.5;
+      if (u.cls === 'ranger' && g.isAdjTo(x, y, T.TREE)) pos += 0.8;
+      for (const f of rangedFoes) {
+        const d = dist(f.x, f.y, x, y);
+        if (d > 1 && d <= 7 && lineOfSight(g, f.x, f.y, x, y)) pos -= halfCover(g, f.x, f.y, x, y) ? 0.3 : 1;
+      }
+      const fd = field[k] === 999 ? 30 : field[k];
+      pos -= Math.max(0, fd - pref) * 0.5;
+      if (pref > 1 && foes.some(f => dist(f.x, f.y, x, y) <= 1)) pos -= 2.5;
+      const act = this.bestAction(u, x, y);
+      const total = pos + act.score * 2;
+      if (total > best.score) best = { score: total, move: [x, y], act: act.act };
+    }
+    return best;
+  }
+}

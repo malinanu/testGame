@@ -193,6 +193,54 @@ export class View {
     this.hover.children[0].material.color.set(color);
   }
 
+  /** Dotted footprints along a planned walking path ([[x,y],...]) or null to clear. */
+  showPath(path) {
+    if (!this.pathGroup) { this.pathGroup = new THREE.Group(); this.scene.add(this.pathGroup); }
+    this.pathGroup.clear();
+    if (!path || path.length < 2) return;
+    const mat = new THREE.MeshBasicMaterial({ color: 0xbfe4ff, transparent: true, opacity: 0.85, depthWrite: false });
+    const geo = new THREE.CircleGeometry(0.16, 12).rotateX(-Math.PI / 2);
+    for (let i = 1; i < path.length; i++) {
+      const a = tw(...path[i - 1]), b = tw(...path[i]);
+      for (const k of [0.33, 0.66, 1]) {
+        const d = new THREE.Mesh(geo, mat); d.position.lerpVectors(a, b, k).setY(0.07);
+        if (k === 1 && i === path.length - 1) d.scale.setScalar(2.2);
+        d.renderOrder = 4; this.pathGroup.add(d);
+      }
+    }
+  }
+
+  /** Floating "78% · 5" badge over a tile ({x,y,text,kind}) or null. */
+  showBadge(b) {
+    if (!this.badgeEl) { this.badgeEl = document.createElement('div'); this.badgeEl.className = 'tbadge'; this.labels.appendChild(this.badgeEl); }
+    this.badge = b;
+    this.badgeEl.style.display = b ? '' : 'none';
+    if (b) { this.badgeEl.textContent = b.text; this.badgeEl.className = 'tbadge ' + (b.kind || ''); }
+  }
+
+  /** Bouncing chevron over heroes that can still act. */
+  setReady(u, on) { const uv = this.uv(u); if (uv) uv.label.classList.toggle('ready', !!on); }
+
+  /** Screen position of a tile (with height) or of a unit; used by the tutorial pointer. */
+  screenOf(x, y, h = 0) {
+    const v = tw(x, y).setY(h).project(this.camera);
+    return { x: (v.x * 0.5 + 0.5) * innerWidth, y: (-v.y * 0.5 + 0.5) * innerHeight, visible: v.z < 1 };
+  }
+
+  /** Enemy turn: ease the camera toward whoever is acting, then back. */
+  async focusUnit(u) {
+    if (u.side !== 'enemy' || this.noFollow) return;
+    const uv = this.uv(u); if (!uv) return;
+    this.camHome ??= this.cam.target.clone();
+    const from = this.cam.target.clone(), to = this.camHome.clone().lerp(uv.actor.root.position.clone().setY(0), 0.6);
+    await this.tween(0.35, k => this.cam.target.lerpVectors(from, to, k * k * (3 - 2 * k)));
+  }
+  async restoreCamera() {
+    if (!this.camHome) return;
+    const from = this.cam.target.clone(), to = this.camHome; this.camHome = null;
+    await this.tween(0.4, k => this.cam.target.lerpVectors(from, to, k));
+  }
+
   // ------------------------------------------------------------ fire
   syncFire() {
     const g = this.grid;
@@ -223,7 +271,7 @@ export class View {
     ring.position.y = 0.05;
     const label = document.createElement('div');
     label.className = 'ulabel ' + u.side;
-    label.innerHTML = `<div class="st"></div><div class="bar"><i></i></div>`;
+    label.innerHTML = `<div class="rdy">▼</div><div class="st"></div><div class="bar"><i></i></div>`;
     this.labels.appendChild(label);
     const uv = { u, actor, ring, label, held: {} };
     tw(u.x, u.y, actor.root.position);
@@ -545,7 +593,8 @@ export class View {
   }
 
   battleCamera() {
-    Object.assign(this.cam, { target: new THREE.Vector3(0, 0, -2), dist: 30, pitch: 0.92, orbit: 0, yaw: 0, yawGoal: 0 });
+    // aim a little toward the player side so their own heroes are not hidden behind the bottom HUD panel
+    Object.assign(this.cam, { target: new THREE.Vector3(0, 0, -5.5), dist: 30, pitch: 0.98, orbit: 0, yaw: 0, yawGoal: 0 });
   }
 
   // ------------------------------------------------------------ input & loop
@@ -631,6 +680,7 @@ export class View {
       el.style.transform = `translate(${(v.x * 0.5 + 0.5) * w}px, ${(-v.y * 0.5 + 0.5) * h}px) translate(-50%, -100%)`;
     };
     for (const uv of this.units.values()) if (uv.u.alive) { uv.label.style.display = ''; place(uv.label, uv.actor.root.position, 2.55); }
+    if (this.badge && this.badgeEl) place(this.badgeEl, tw(this.badge.x, this.badge.y), 3.4);
     for (const f of this.floats) {
       f.t += dt; place(f.el, f.pos, f.t * 0.9);
       f.el.style.opacity = String(Math.min(1, 2.4 - f.t * 2));

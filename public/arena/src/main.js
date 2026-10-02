@@ -7,6 +7,17 @@ import { BattleController } from '../../tactics/src/controller.js';
 import * as E from './economy.js';
 import { toGrid, validate, layoutCost, buildRaid, BEHAVIORS, PALETTE, BUILD_COST, ATTACK_ROWS, DEFENSE_MIN_ROW, RAID_ROUNDS } from './stronghold.js';
 import { createApi } from './api.js';
+import { bindHelp } from '../../tactics/src/help.js';
+
+bindHelp({ extraTab: { id: 'arena', label: '🏰 Arena', html: () => `
+  <div class="steps">
+    <div class="stepc"><span class="num">1</span><b>Build your stronghold</b><p>Stronghold tab → <b>Edit layout &amp; garrison</b>. Paint rocks, trees and bushes (each costs build points), then place 4 defenders in rows 7–12 and give each an order. Raiders always start in rows 1–2.</p></div>
+    <div class="stepc"><span class="num">2</span><b>Raid a rival</b><p>Press <b>⚔ Raid</b>, pick 4 heroes and any potions, and attack. It plays exactly like a Tactics battle: select a hero, move on blue tiles, attack red targets, then End Turn. You have 20 rounds to defeat every defender.</p></div>
+    <div class="stepc"><span class="num">3</span><b>Grow stronger</b><p>Wins pay gold. Spend it in the <b>Armory</b> on gear tiers (Common → Legendary). Grass and bushes on your stronghold grow herbs and berries: collect them and brew in <b>Alchemy</b>.</p></div>
+    <div class="stepc"><span class="num">4</span><b>Climb the leagues</b><p>Every raid moves your Elo, up or down. Other guilds raid <i>your</i> stronghold while you are away, and a good defense earns gold too. Seasons last 28 days; finishing Silver+ earns an aura.</p></div>
+  </div>
+  <div class="tip-line">🛡 <b>Garrison orders:</b> ${Object.values(BEHAVIORS).map(b => `<b>${b.name}</b>: ${b.desc}`).join(' · ')}</div>
+  <div class="tip-line">💡 New to the battles? The single-player <a href="../tactics/" style="color:#ffd54a">Wildwood Tactics</a> has a 2-minute guided training.</div>` } });
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -118,7 +129,12 @@ class Arena {
     const p = this.S.profile, el = $('panel');
     if (this.tab === 'base') {
       const sh = this.S.stronghold, pend = this.S.pending || { herbs: 0, berries: 0 }, rates = E.harvestRates(sh.layout);
-      el.innerHTML = `<h3>Your stronghold</h3>
+      const steps = [
+        ['Edit your stronghold', sh.version > 1], ['Brew something in Alchemy', Object.values(p.consumables).reduce((a, b) => a + b, 0) > 1 || p.consumables.ale > 0 || p.consumables.tonic > 0],
+        ['Win or lose your first raid', p.wins + p.losses > 0], ['Check how your defenders did', (this.S.defenseLog || []).length > 0],
+      ];
+      const todo = steps.filter(s => !s[1]).length;
+      el.innerHTML = (todo ? `<div class="checklist"><h3>Getting started <small>${steps.length - todo}/${steps.length}</small></h3>${steps.map(([t, d]) => `<div class="${d ? 'done' : ''}">${d ? '✅' : '⬜'} ${t}</div>`).join('')}<button class="btn helpbtn" data-help="arena">❓ How the Arena works</button></div>` : '') + `<h3>Your stronghold</h3>
         <div class="item"><div><span class="nm">Level ${p.level}</span><small>Build budget ${layoutCost(sh.layout)} / ${E.buildBudget(p.level)} · layout v${sh.version}</small></div>
           <button class="btn gold" id="h-edit">Edit layout & garrison</button></div>
         <div class="item"><div><span class="nm">Harvest</span><small>Grass tufts grow herbs (${rates.herbs.toFixed(1)}/h), bushes grow berries (${rates.berries.toFixed(1)}/h). Stores fill for ${E.HARVEST.capHours}h.</small></div>

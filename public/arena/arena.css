@@ -60,3 +60,7 @@ input#name { font: 600 18px inherit; font-family: inherit; padding: 12px 14px; b
   .bpanel.left, .bpanel.right { position: static; width: auto; margin: 6px; }
   .bpanel.top { position: static; transform: none; flex-wrap: wrap; white-space: normal; }
 }
+.howlist { text-align: left; max-width: 560px; line-height: 1.6; font-size: 15px; opacity: .92; margin: 6px auto 0; }
+.checklist { background: #ffd54a12; border: 1px solid #ffd54a55; border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; font-size: 14px; }
+.checklist h3 { margin: 0 0 6px !important; } .checklist div { padding: 2px 0; } .checklist div.done { opacity: .6; text-decoration: line-through; }
+.checklist .btn { margin-top: 8px; font-size: 12px; }

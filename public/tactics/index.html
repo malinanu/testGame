@@ -16,12 +16,15 @@
 <div id="hud" class="hidden">
   <div id="topbar"><b id="round">Round 1</b><span id="vs"></span></div>
   <div id="banner"></div>
+  <div id="hint" aria-live="polite"></div>
+  <div id="legend"><span><i style="background:#3a8dff"></i>Move</span><span><i style="background:#ff4d4d"></i>Attack</span><span><i style="background:#6dff8a"></i>Heal</span><span><i style="background:#ffa040"></i>Area</span><span><i style="background:#ffd54a"></i>Selected</span>
+    <button id="dangerbtn" class="btn" title="Show tiles the enemy can hit next turn (T)">⚠️ Threats <kbd>T</kbd></button><button class="btn helpbtn" title="How to play (H)">❓ Help <kbd>H</kbd></button></div>
   <div id="roster"></div>
   <div id="unitpanel"><div id="uinfo"></div><div id="abils"></div></div>
   <button id="endturn" class="btn gold">End Turn <kbd>⏎</kbd></button>
   <div id="tip"></div>
   <div id="log"></div>
-  <div id="keys">Click unit · click tile to move · 1-4 abilities · Esc cancel · Tab next · Q/E rotate · WASD pan · wheel zoom · right-drag orbit</div>
+  <div id="keys">Right-drag orbit · wheel zoom · Q/E rotate · WASD pan · 1-4 abilities · Tab next hero · Esc cancel</div>
 </div>
 
 <section id="screen-loading" class="screen active"><h1>Wildwood Tactics</h1><p id="loadtxt">Gathering the guilds…</p></section>
@@ -31,9 +34,12 @@
   <p class="lede">The mercenary guilds have turned on each other in the Wildwood. Draft a party of four, outfight rival squads among the
     rocks and trees, and break the Hollow Crown.</p>
   <div class="row">
+    <button id="btn-learn" class="btn learn big">🎓 Learn to play (2 min)</button>
     <button id="btn-new" class="btn gold big">New Run</button>
     <button id="btn-continue" class="btn big">Continue</button>
   </div>
+  <p id="newhere" class="maphint"></p>
+  <div class="row"><button class="btn helpbtn">❓ How to play</button></div>
   <details class="howto"><summary>How to play</summary>
     <ul>
       <li>Each hero can <b>move</b> once and take one <b>action</b> per turn, in either order. Then the enemy squad moves.</li>
@@ -49,6 +55,8 @@
 
 <section id="screen-draft" class="screen">
   <h2>Draft your party <small id="draftcount">0 / 4</small></h2>
+  <div class="quick"><span>Pick any 4 heroes, or</span><button id="btn-quick" class="btn">⭐ Use the recommended party</button><button class="btn helpbtn" data-help="classes">❓ Hero guide</button></div>
+  <div id="draftwarn" class="dhint"></div>
   <div id="draftcards" class="cards"></div>
   <button id="btn-begin" class="btn gold big" disabled>Enter the Wildwood</button>
 </section>
@@ -56,6 +64,8 @@
 <section id="screen-map" class="screen">
   <div class="mapwrap">
     <div class="maphead"><h2>The Wildwood</h2><div id="res"></div></div>
+    <div class="maphint">👆 Click a glowing node to travel. Lines show the routes upward to the boss ♛.</div>
+    <div class="mapleg"><span>⚔ Skirmish</span><span>☠ Elite (harder, better loot)</span><span>🔥 Campfire (heal / revive)</span><span>✦ Supply cache (free loot)</span><span>♛ Boss</span><button class="btn helpbtn" data-help="run" style="font-size:12px;padding:3px 8px">❓</button></div>
     <svg id="mapsvg"></svg>
     <div id="nodetip"></div>
   </div>
@@ -71,9 +81,16 @@
 <section id="screen-camp" class="screen bottom">
   <div class="camppanel">
     <h2>Campfire <small id="campres"></small></h2>
+    <p class="maphint" style="margin-top:-6px">🍺 A mug heals one hero 60% (2 supplies) · 🧪 a potion revives a fallen hero · Rest heals everyone 20% once.</p>
     <div id="camplist"></div>
     <div class="row"><button id="btn-rest" class="btn">Rest by the fire (+20% all)</button><button id="btn-breakcamp" class="btn gold">Break camp →</button></div>
   </div>
+</section>
+
+<section id="screen-tutdone" class="screen">
+  <h1 id="tuttitle">You're ready!</h1>
+  <p class="lede" id="tuttext">That's the whole loop: <b>select → move → act → End Turn</b>. Use cover, hide in bushes and keep an eye on the enemy's threat range (T).</p>
+  <div class="row"><button id="btn-tut-run" class="btn gold big">Start a real run</button><button id="btn-tut-again" class="btn big">Replay training</button><button id="btn-tut-title" class="btn big">Title screen</button></div>
 </section>
 
 <section id="screen-end" class="screen">

@@ -57,7 +57,12 @@ class Game {
     $('t-speed').onchange = e => { this.scene.speed = this.scene.vfx.speed = +e.target.value; };
     addEventListener('keydown', e => { if (e.code === 'KeyU') this.undo(); if (e.code === 'KeyF') this.scene.flip(); if (e.code === 'Escape') this.select(null); });
     scene.onSquare = sq => this.click(sq);
-    scene.onHover = sq => scene.setHover(this.isHumanTurn() && !this.busy ? sq : null);
+    scene.onHover = sq => { scene.setHover(this.isHumanTurn() && !this.busy ? sq : null); this.pieceTip(sq); };
+    addEventListener('mousemove', e => { this.mx = e.clientX; this.my = e.clientY; const t = $('ptip'); if (t.style.display === 'block') { t.style.left = `${e.clientX + 16}px`; t.style.top = `${e.clientY + 14}px`; } });
+    const help = () => show(document.querySelector('#screen-help.active') ? (this.helpFrom || 'none') : (this.helpFrom = document.querySelector('.screen.active')?.id.replace('screen-', '') || 'none', 'help'));
+    $('b-help').onclick = help; $('b-menuhelp').onclick = help;
+    $('b-helpclose').onclick = () => show(this.helpFrom || 'none');
+    addEventListener('keydown', e => { if (e.code === 'KeyH') help(); });
   }
 
   start() {
@@ -100,6 +105,30 @@ class Game {
     $('moves').innerHTML = rows.join('');
     $('moves').scrollTop = 1e6;
     $('b-undo').disabled = this.busy || !h.length || this.mode === 'watch';
+    this.renderHint(thinking);
+  }
+
+  pieceTip(sq) {
+    const t = $('ptip'), p = sq == null ? 0 : this.chess.get(sq);
+    if (!p || !this.active) { t.style.display = 'none'; return; }
+    const INFO = { 1: ['Pawn', 'the rogue', 'Moves forward 1 (2 on its first move), captures diagonally.'], 2: ['Knight', 'the leaping barbarian', 'Moves in an L and jumps over pieces.'],
+      3: ['Bishop', 'the archer', 'Moves any distance diagonally.'], 4: ['Rook', 'the stone tower', 'Moves any distance straight.'], 5: ['Queen', 'the witch', 'Moves any distance straight or diagonally.'], 6: ['King', 'the crowned knight', 'Moves 1 square. Protect him at all costs.'] };
+    const [n, who, how] = INFO[type(p)], mine = this.humans?.has(color(p));
+    const nMoves = color(p) === this.chess.turn ? this.chess.moves(sq).length : null;
+    t.innerHTML = `<b>${SIDE(color(p))} ${n}</b>: ${who}<br>${how}${mine && nMoves != null ? `<br><i>${nMoves ? `${nMoves} legal move${nMoves > 1 ? 's' : ''}: click to see them` : 'No legal moves right now'}</i>` : ''}`;
+    t.style.display = 'block'; t.style.left = `${(this.mx || 0) + 16}px`; t.style.top = `${(this.my || 0) + 14}px`;
+  }
+
+  renderHint(thinking) {
+    const h = $('hint'); if (!h) return;
+    h.classList.remove('warn');
+    if (!this.active) { h.textContent = ''; return; }
+    if (thinking) { h.textContent = this.mode === 'watch' ? '' : `${SIDE(this.chess.turn)} is thinking…`; return; }
+    if (!this.isHumanTurn()) { h.textContent = ''; return; }
+    const check = this.chess.inCheck();
+    if (check) h.classList.add('warn');
+    if (this.selected != null) h.innerHTML = `Click a lit square: <b style="color:#66d8ff">blue</b> to move, <b style="color:#ff6a5a">red</b> to capture. Click another of your pieces to switch.`;
+    else h.innerHTML = check ? '⚠️ Your King is in <b>check</b>! Move him, block the attack or capture the attacker.' : `👆 ${this.mode === 'local' ? SIDE(this.chess.turn) + ': click' : 'Click'} one of your pieces to see where it can go. Hover any piece to learn how it moves.`;
   }
 
   checkSquare() { return this.chess.inCheck() ? this.chess.kings[this.chess.turn >> 3] : null; }
@@ -142,6 +171,7 @@ class Game {
     this.selMoves = moves;
     const uniq = new Map(); for (const m of moves) uniq.set(m.to, { sq: m.to, capture: !!m.captured });
     this.scene.setHighlights({ selected: sq, moves: [...uniq.values()], last: this.last, check: this.chess.inCheck() ? this.checkSquare() : null });
+    this.renderHint();
   }
 
   async click(sq) {
@@ -150,7 +180,7 @@ class Game {
     if (p && color(p) === this.chess.turn) { this.sfx.step(); return this.select(sq === this.selected ? null : sq); }
     if (this.selected == null) return;
     const cands = this.selMoves.filter(m => m.to === sq);
-    if (!cands.length) return this.select(null);
+    if (!cands.length) { this.select(null); const h = $('hint'); if (this.chess.get(sq)) { h.classList.add('warn'); h.textContent = "That piece can't reach there. Pick one of your own pieces first."; } return; }
     let promo = 0;
     if (cands[0].promo) promo = await this.askPromotion();
     await this.perform({ from: this.selected, to: sq, promo });

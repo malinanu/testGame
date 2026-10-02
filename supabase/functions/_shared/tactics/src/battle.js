@@ -310,6 +310,7 @@ export class Battle {
     let changed = false;
     for (let i = 0; i < this.g.fire.length; i++) if (this.g.fire[i]) { this.g.fire[i]--; changed = true; }
     if (changed) await this.view.fire();
+    await this.view.restoreCamera?.();
     this.round++;
     if (this.maxRounds && this.round > this.maxRounds) {
       this.say('The defenders held out!');
@@ -325,6 +326,7 @@ export class Battle {
     for (const u of order) {
       if (this.over) return;
       if (!u.alive || (u.moved && u.acted)) continue;
+      await this.view.focusUnit?.(u);
       await this.aiTurn(u);
       await this.view.wait?.(0.15);
     }

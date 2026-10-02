@@ -4,6 +4,8 @@ import { generateMap, pathTo, dist } from './grid.js';
 import { Battle, makeUnit } from './battle.js';
 import { View } from './view.js';
 import { BattleController } from './controller.js';
+import { bindHelp } from './help.js';
+import { runTutorial, TUTORIAL_KEY } from './tutorial.js';
 import * as Run from './run.js';
 
 const $ = id => document.getElementById(id);
@@ -33,6 +35,11 @@ class App {
   constructor(view) {
     this.view = view; this.run = null; this.draft = [];
     $('btn-new').onclick = () => this.showDraft();
+    $('btn-learn').onclick = () => this.tutorial();
+    $('btn-tut-run').onclick = () => this.showDraft();
+    $('btn-tut-again').onclick = () => this.tutorial();
+    $('btn-tut-title').onclick = () => this.showTitle();
+    $('btn-quick').onclick = () => this.pickParty(['knight', 'ranger', 'wizard', 'barbarian']);
     $('btn-continue').onclick = () => { this.run = Run.load(); this.showMap(); };
     $('btn-begin').onclick = () => { this.run = Run.newRun(this.draft); Run.save(this.run); this.showMap(); };
     $('btn-again').onclick = () => this.showTitle();
@@ -47,7 +54,26 @@ class App {
     if (this.view.camp.children.length || !this.view.board.visible || this.view.units.size) this.backdrop();
     const saved = Run.load();
     $('btn-continue').style.display = saved && saved.party?.some(h => h.alive) ? '' : 'none';
+    let seen = false; try { seen = localStorage.getItem(TUTORIAL_KEY) === '1'; } catch {}
+    $('newhere').textContent = seen ? '' : '👋 New here? Start with the 2-minute training. It walks you through your first battle.';
+    $('btn-learn').classList.toggle('pulse', !seen);
     show('title');
+  }
+
+  async tutorial() {
+    this.ctl?.dispose(); this.ctl = null;
+    const how = await runTutorial(this.view, { show });
+    if (how === 'skipped') return this.showTitle();
+    $('tuttitle').textContent = how === 'done' ? "You're ready!" : 'Almost!';
+    $('tuttext').innerHTML = how === 'done'
+      ? "That's the whole loop: <b>select → move → act → End Turn</b>. Use cover, hide in bushes and watch the enemy's threat range (press T)."
+      : 'The dummies got lucky. Try again, or start a real run. The top bar always tells you what to do next.';
+    show('tutdone');
+  }
+
+  pickParty(list) {
+    this.draft = [...list];
+    this.renderDraft();
   }
 
   showDraft() {
@@ -56,21 +82,34 @@ class App {
     for (const k of CLASS_KEYS) {
       const c = CLASSES[k], el = document.createElement('button');
       el.className = 'card';
-      el.innerHTML = `<b class="t">${c.name}</b><span class="sub">${c.role}</span>
+      const tag = { knight: ['Tank', ''], barbarian: ['Damage', 'dmg'], ranger: ['Damage', 'dmg'], rogue: ['Damage', 'dmg'], wizard: ['Support', 'sup'], fighter: ['Tank / Damage', ''] }[k];
+      el.innerHTML = `<b class="t">${c.name}<span class="tag ${tag[1]}">${tag[0]}</span></b><span class="sub">${c.role}</span>
         <div class="stats">❤ ${c.hp} HP · ➜ ${c.move} move${c.armor ? ` · ⛨ ${c.armor} armor` : ''}</div>
         <ul>${c.abilities.map(a => `<li><b>${ABIL[a].name}</b>: ${ABIL[a].desc}</li>`).join('')}</ul>
         <div class="pas">${c.passive}</div>`;
       el.onclick = () => {
         const i = this.draft.indexOf(k);
         if (i >= 0) this.draft.splice(i, 1); else if (this.draft.length < 4) this.draft.push(k);
-        box.querySelectorAll('.card').forEach((b, j) => b.classList.toggle('sel', this.draft.includes(CLASS_KEYS[j])));
-        $('draftcount').textContent = `${this.draft.length} / 4`;
-        $('btn-begin').disabled = this.draft.length !== 4;
+        this.renderDraft();
       };
       box.appendChild(el);
     }
-    $('draftcount').textContent = '0 / 4'; $('btn-begin').disabled = true;
+    this.renderDraft();
     show('draft');
+  }
+
+  renderDraft() {
+    const d = this.draft;
+    $('draftcards').querySelectorAll('.card').forEach((b, j) => b.classList.toggle('sel', d.includes(CLASS_KEYS[j])));
+    $('draftcount').textContent = `${d.length} / 4`;
+    $('btn-begin').disabled = d.length !== 4;
+    const warn = [];
+    if (d.length === 4) {
+      if (!d.includes('wizard')) warn.push('No Wizard means no healing in battle. Campfires will matter a lot.');
+      if (!d.includes('knight') && !d.includes('fighter')) warn.push('No Knight or Fighter: nobody tough to stand in front.');
+      if (!d.some(c => c === 'ranger' || c === 'wizard')) warn.push('No ranged hero: you will have to walk up to everything.');
+    }
+    $('draftwarn').textContent = d.length < 4 ? `Pick ${4 - d.length} more hero${4 - d.length > 1 ? 'es' : ''}. Click a card to add or remove it.` : warn.length ? `⚠️ ${warn.join(' ')}` : '✅ Nicely balanced party.';
   }
 
   // -------------------------------------------------------------- node map
@@ -208,6 +247,7 @@ class App {
 // ------------------------------------------------------------------ boot
 const assets = await loadAssets({ base: '../', props: PROPS, forest: FOREST, onProgress: (d, n) => { $('loadtxt').textContent = `Gathering the guilds… ${Math.round(d / n * 100)}%`; } });
 const view = new View($('c'), assets);
+bindHelp();
 const app = new App(view);
 window.app = app; // for debugging and automated tests
 app.showTitle();

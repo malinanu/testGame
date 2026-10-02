@@ -23,3 +23,7 @@ h1{font-size:clamp(32px,6vw,64px);margin:0 0 8px;color:var(--gold);text-shadow:0
 .hero b{display:block;font-size:20px;color:var(--gold)} .hero small{display:block;opacity:.85;margin-top:6px;line-height:1.35}
 button#again{margin-top:16px;font:700 20px inherit;padding:12px 28px;border-radius:12px;border:0;background:var(--gold);color:var(--ink);cursor:pointer}
 #end h2{font-size:56px;margin:0}
+
+.controls { display: grid; grid-template-columns: repeat(2, auto); gap: 6px 22px; background: #0006; border: 1px solid #fff3; border-radius: 12px; padding: 10px 16px; margin-top: 10px; font-size: 14px; text-align: left; }
+.controls div:last-child { grid-column: 1 / -1; opacity: .9; }
+.controls kbd { background: #fff2; border: 1px solid #fff5; border-radius: 5px; padding: 1px 6px; font-family: inherit; font-size: 12px; }

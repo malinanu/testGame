@@ -164,7 +164,7 @@ body.heromode #buildbar, body.heromode #tools .tool:not(.hero), body.heromode #i
   #minimapwrap { display: none; }
   #quest { width: 230px; } #feed { width: 230px; }
   .tb-goods { display: none; }
-  #tools { grid-template-columns: repeat(4, auto); } .tool { width: 70px; } .tool.hero { grid-column: span 1; }
+  #tools { grid-template-columns: repeat(5, auto); } .tool { width: 70px; } .tool.hero { grid-column: span 1; }
   #inspector { top: auto; bottom: 230px; right: 8px; left: 8px; width: auto; max-height: 40vh; }
 }
 #feed .note { max-width: 300px; overflow-wrap: anywhere; }
@@ -173,3 +173,15 @@ body.heromode #buildbar, body.heromode #tools .tool:not(.hero), body.heromode #i
 .seg button { font: 600 14px system-ui, sans-serif; color: #fff6e0; background: #0004; border: 0; border-right: 1px solid #c9a24a55; padding: 8px 12px; cursor: pointer; }
 .seg button:last-child { border-right: 0; }
 .seg button.on { background: var(--gold); color: var(--ink); }
+
+.statsbox { width: min(760px, 96vw); }
+#statstabs { margin: 0 auto 10px; display: flex; width: max-content; }
+table.stats { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.stats th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; opacity: .7; padding: 4px; }
+table.stats td { padding: 3px 4px; border-bottom: 1px solid #ffffff14; }
+table.stats tr.deficit td { color: #ffb0a0; }
+canvas.spark { display: block; background: #0002; border-radius: 4px; }
+canvas.chart { width: 100%; height: auto; background: #f3e6c8; border-radius: 10px; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; margin: 6px 0; }
+.legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+#statsbody { max-height: 60vh; overflow-y: auto; }

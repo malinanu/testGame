@@ -3,7 +3,7 @@
 // drains `events` every frame; the UI calls the action methods.
 import {
   W, H, STEP, DAY, GOODS, GOOD_KEYS, TIERS, BUILDINGS, RELICS, LAIR_KINDS, START, CARRIER_SPEED, LOCAL_CAP,
-  RAID_EVERY, RAID_RANGE, FIRE_TIME, CARAVAN_EVERY, CARAVAN_STAY, QUESTS, SANCTUM_POP, DIFFICULTY, GRANT_POP,
+  RAID_EVERY, RAID_RANGE, FIRE_TIME, CARAVAN_EVERY, CARAVAN_STAY, QUESTS, SANCTUM_POP, DIFFICULTY, GRANT_POP, FESTIVAL, EXPEDITION, HIST_EVERY, HIST_MAX,
 } from './data.js';
 import { generateWorld, rng, idx, inMap, dist, T } from './map.js';
 
@@ -172,19 +172,32 @@ export class Colony {
     return b;
   }
 
-  buildRoad(x, y) {
+  /** Dirt road (1 gold) or paved road (1 brick + 2 gold, carriers walk 50% faster); paving upgrades dirt. */
+  buildRoad(x, y, paved = false) {
+    const k = inMap(x, y) ? idx(x, y) : -1;
+    if (paved && k >= 0 && this.road[k] === 1) {
+      if (this.gold < 2 || (this.stock.bricks || 0) < 1) return { error: 'Paving needs 1 Brick and 2 gold per tile' };
+      this.gold -= 2; this.stock.bricks--; this.setRoad(x, y, true, 2);
+      return { road: true, paved: true };
+    }
     const err = this.placeError('road', x, y);
     if (err) return { error: err };
     if (this.depositAt(x, y)) return { error: 'Deposit in the way' };
-    if (this.gold < 1) return { error: 'Not enough gold' };
-    this.gold -= 1; this.setRoad(x, y, true);
-    return { road: true };
+    if (paved) {
+      if (this.gold < 2 || (this.stock.bricks || 0) < 1) return { error: 'Paving needs 1 Brick and 2 gold per tile' };
+      this.gold -= 2; this.stock.bricks--;
+    } else {
+      if (this.gold < 1) return { error: 'Not enough gold' };
+      this.gold -= 1;
+    }
+    this.setRoad(x, y, true, paved ? 2 : 1);
+    return { road: true, paved };
   }
-  setRoad(x, y, on) {
+  setRoad(x, y, on, level = 1) {
     const k = idx(x, y);
     if (on && this.tree[k]) { this.tree[k] = 0; this.emit('tree', { x, y, on: false }); }
-    this.road[k] = on ? 1 : 0; this.dirty = true;
-    this.emit('road', { x, y, on });
+    this.road[k] = on ? level : 0; this.dirty = true;
+    this.emit('road', { x, y, on, level });
   }
 
   /** Demolish a building (refund half the goods) or a road tile. */
@@ -265,14 +278,24 @@ export class Colony {
     const rd = new Int32Array(W * H).fill(-1), from = new Int32Array(W * H), q = [];
     const storages = [...this.buildings.values()].filter(b => BUILDINGS[b.type].storage && !b.ruined);
     for (const s of storages) for (const k of this.doorTiles(s)) if (rd[k] < 0) { rd[k] = 0; from[k] = s.id; q.push(k); }
-    for (let h = 0; h < q.length; h++) {
-      const k = q[h], x = k % W, y = (k / W) | 0;
-      for (const [dx, dy] of N4) {
-        const nx = x + dx, ny = y + dy;
-        if (!inMap(nx, ny)) continue;
-        const j = idx(nx, ny);
-        if (!this.road[j] || rd[j] >= 0) continue;
-        rd[j] = rd[k] + 1; from[j] = from[k]; q.push(j);
+    // bucket-queue Dijkstra over road tiles: dirt costs 3, paved 2 (carriers walk faster on stone)
+    const cost = new Int32Array(W * H).fill(-1), buckets = [q.slice()];
+    for (const k of q) cost[k] = 0;
+    for (let c0 = 0; c0 < buckets.length; c0++) {
+      const list = buckets[c0]; if (!list) continue;
+      for (const k of list) {
+        if (cost[k] !== c0) continue;
+        const x = k % W, y = (k / W) | 0;
+        for (const [dx, dy] of N4) {
+          const nx = x + dx, ny = y + dy;
+          if (!inMap(nx, ny)) continue;
+          const j = idx(nx, ny);
+          if (!this.road[j]) continue;
+          const nc = c0 + (this.road[j] === 2 ? 2 : 3);
+          if (cost[j] >= 0 && cost[j] <= nc) continue;
+          cost[j] = nc; rd[j] = nc; from[j] = from[k];
+          (buckets[nc] ||= []).push(j);
+        }
       }
     }
     this.roadDist = rd; this.roadFrom = from;
@@ -289,7 +312,7 @@ export class Colony {
         if (dist(b.cx, b.cy, s.cx, s.cy) > BUILDINGS[s.type].logistic) continue;
         if (!best || rd[k] < best.d) best = { d: rd[k], s: s.id };
       }
-      b.connected = !!best; b.storage = best?.s || 0; b.roadLen = best ? best.d + 2 : 0;
+      b.connected = !!best; b.storage = best?.s || 0; b.roadLen = best ? best.d / 3 + 2 : 0; // in dirt-tile equivalents
     }
     this.emit('logistics');
   }
@@ -363,6 +386,9 @@ export class Colony {
     this.tickRaids(blds);
     this.tickCaravan();
     if (Math.round(this.time / STEP) % 4 === 0) this.tickQuests();
+    if (this.festivalUntil && this.time >= this.festivalUntil) { this.festivalUntil = 0; this.emit('festivalEnd'); this.notify('The festival is over. Back to work!', 'info'); }
+    if (this.expedition && this.time >= this.expedition.back) this.finishExpedition();
+    if ((this.histT = (this.histT || 0) - STEP) <= 0) { this.histT = HIST_EVERY; this.sample(); }
   }
 
   active(b) { return b.connected && !b.paused && !b.fire && !b.ruined; }
@@ -455,7 +481,7 @@ export class Colony {
     const frac = basicMet / tier.basic.length, lux = luxMet / tier.luxury.length;
     const target = Math.max(1, Math.round(tier.cap * frac * frac)); // unmet needs drive people away fast
     b.target = target;
-    b.happiness = Math.round(Math.max(0, Math.min(100, 40 + 45 * lux + 15 * frac - (frac < 1 ? 20 : 0))));
+    b.happiness = Math.round(Math.max(0, Math.min(100, 40 + 45 * lux + 15 * frac - (frac < 1 ? 20 : 0) + (this.festivalUntil ? FESTIVAL.happy : 0))));
     if ((b.moveT -= STEP) <= 0) {
       b.moveT = 4;
       if (b.residents < target) { b.residents++; this.emit('movein', { id: b.id }); }
@@ -613,6 +639,59 @@ export class Colony {
     return { lair: l.id };
   }
 
+  // ------------------------------------------------------------------ statistics
+  /** Every HIST_EVERY seconds: gold, finances, population and goods flows (per minute). */
+  sample() {
+    const h = this.history ||= [];
+    const last = this._histTotals || { prod: {}, cons: {} }, per = 60 / HIST_EVERY;
+    const flow = (now, before) => Object.fromEntries(GOOD_KEYS.map(g => [g, +(((now[g] || 0) - (before[g] || 0)) * per).toFixed(2)]));
+    h.push({ t: Math.round(this.time), gold: Math.round(this.gold), income: +this.stats.income.toFixed(1), upkeep: +this.stats.upkeep.toFixed(1),
+      pop: [this.pop.settlers, this.pop.craftsmen, this.pop.merchants].map(Math.floor), prod: flow(this.stats.prod, last.prod), cons: flow(this.stats.cons, last.cons) });
+    if (h.length > HIST_MAX) h.shift();
+    this._histTotals = { prod: { ...this.stats.prod }, cons: { ...this.stats.cons } };
+  }
+
+  // ------------------------------------------------------------------ festival & expeditions
+  festivalError() {
+    if (this.festivalUntil) return 'A festival is already under way';
+    if (this.time < (this.festivalReady || 0)) return `The town needs ${Math.ceil(this.festivalReady - this.time)}s to recover from the last one`;
+    if (!this.affordable(FESTIVAL.cost)) return `Not enough ${this.missing(FESTIVAL.cost).join(', ')}`;
+    return '';
+  }
+  festival() {
+    const err = this.festivalError(); if (err) return { error: err };
+    this.pay(FESTIVAL.cost); this.festivalUntil = this.time + FESTIVAL.time; this.festivalReady = this.festivalUntil + FESTIVAL.cooldown;
+    this.emit('festival'); this.notify(`Festival! Every home is +${FESTIVAL.happy} happier for ${FESTIVAL.time / 60} minutes.`, 'good');
+    return { ok: true };
+  }
+  expeditionError() {
+    if (!this.ofType('cartographer').some(b => this.active(b))) return 'Needs a working Cartographer';
+    if (this.expedition) return 'An expedition is already out';
+    if (!this.affordable(EXPEDITION.cost)) return `Not enough ${this.missing(EXPEDITION.cost).join(', ')}`;
+    return '';
+  }
+  startExpedition() {
+    const err = this.expeditionError(); if (err) return { error: err };
+    this.pay(EXPEDITION.cost); this.expedition = { start: this.time, back: this.time + EXPEDITION.time };
+    this.emit('expedition', { out: true }); this.notify('An expedition sets out into the wilds…', 'info');
+    return { ok: true };
+  }
+  finishExpedition() {
+    this.expedition = null;
+    const r = this.rand(), th = this.ofType('townhall')[0];
+    let text;
+    const hidden = (list, pred) => list.filter(pred).sort((a, b) => dist(a.x, a.y, th.cx, th.cy) - dist(b.x, b.y, th.cx, th.cy))[0];
+    if (r < 0.25 && hidden(this.deposits, d => !d.found)) { const d = hidden(this.deposits, d => !d.found); this.reveal(d.x + 1, d.y + 1, 5); text = `The expedition charted a ${d.kind} deposit!`; }
+    else if (r < 0.45 && hidden(this.lairs, l => !l.found)) { const l = hidden(this.lairs, q => !q.found && q.relic) || hidden(this.lairs, q => !q.found); this.reveal(l.x + 1.5, l.y + 1.5, 6); text = `The expedition found ${l.relic ? 'a relic site' : 'a creature lair'}.`; }
+    else if (r < 0.6) { this.gain({ gold: 450, maps: 1 }); text = 'The expedition returns with a merchant\'s purse: 450 gold and a map.'; }
+    else {
+      const pool = ['planks', 'bricks', 'tools', 'textiles', 'iron', 'ale'], a = pool[Math.floor(this.rand() * pool.length)], b = pool[Math.floor(this.rand() * pool.length)];
+      const loot = { [a]: 8 }; loot[b] = (loot[b] || 0) + 6; this.gain(loot); text = `The expedition brings back ${this.lootText(loot)}.`;
+    }
+    this.emit('expedition', { out: false, text }); this.notify(text, 'good');
+    return text;
+  }
+
   // ------------------------------------------------------------------ quests
   tickQuests() {
     const q = QUESTS[this.questIdx];
@@ -630,6 +709,7 @@ export class Colony {
     const s = a => { let out = ''; for (let i = 0; i < a.length; i += 4096) out += enc(Array.from(a.subarray(i, i + 4096))); return out; };
     return JSON.stringify({
       v: 1, seed: this.seed, hero: this.hero, difficulty: this.difficulty, grant: this.grant, gold: this.gold, stock: this.stock, time: this.time, acc: this.acc,
+      history: this.history || [], histTotals: this._histTotals || null, festivalUntil: this.festivalUntil || 0, festivalReady: this.festivalReady || 0, expedition: this.expedition || null,
       relics: this.relics, questIdx: this.questIdx, won: this.won, caravan: this.caravan, peak: this.peak, unlockedSeen: this.unlockedSeen || {},
       nextId: this.nextId, nextRaidId: this.nextRaidId, raids: this.raids, trips: this.trips || [],
       tree: s(this.tree), fog: s(this.fog), road: s(this.road),
@@ -645,6 +725,7 @@ export class Colony {
     const dec = (str, arr) => { for (let i = 0; i < arr.length; i++) arr[i] = str.charCodeAt(i) - 48; };
     dec(d.tree, c.tree); dec(d.fog, c.fog); dec(d.road, c.road);
     Object.assign(c, { hero: d.hero, gold: d.gold, stock: d.stock, time: d.time, acc: d.acc, relics: d.relics, questIdx: d.questIdx, won: d.won, caravan: d.caravan,
+      history: d.history || [], _histTotals: d.histTotals || undefined, festivalUntil: d.festivalUntil || 0, festivalReady: d.festivalReady || 0, expedition: d.expedition || null,
       _peak: d.peak, unlockedSeen: d.unlockedSeen, nextId: d.nextId, nextRaidId: d.nextRaidId, raids: d.raids, trips: d.trips, deposits: d.deposits, lairs: d.lairs, chests: d.chests, stats: d.stats });
     c.rand = rng(d.seed * 4099 + 77 + Math.floor(d.time));
     for (const b of d.buildings) { c.buildings.set(b.id, b); for (let j = 0; j < b.h; j++) for (let i = 0; i < b.w; i++) c.occ[idx(b.x + i, b.y + j)] = b.id; }

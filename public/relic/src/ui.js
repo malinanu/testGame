@@ -1,7 +1,7 @@
 // HUD for Wildwood Colony: top resource bar, build menu (with rendered thumbnails), inspector,
 // objective, notifications, minimap and tooltips. Reads the Colony; actions go through `game`.
 import * as THREE from 'three';
-import { GOODS, GOOD_KEYS, TIERS, BUILDINGS, CATEGORIES, RELICS, LAIR_KINDS, W, H } from './data.js';
+import { GOODS, GOOD_KEYS, TIERS, BUILDINGS, CATEGORIES, RELICS, LAIR_KINDS, W, H, FESTIVAL, EXPEDITION, HIST_EVERY } from './data.js';
 import { T, idx } from './map.js';
 
 const $ = id => document.getElementById(id);
@@ -149,6 +149,8 @@ export class UI {
       h += `<div class="ibtns">`;
       if (repair) h += `<button class="btn good" data-act="repair">${b.fire ? '🪣 Extinguish' : '🔨 Rebuild'} (${costHtml(repair, c)})</button>`;
       if (d.cycle) h += `<button class="btn" data-act="pause">${b.paused ? '▶ Resume' : '⏸ Pause'}</button>`;
+      const copyType = b.tier != null ? 'hut' : b.type;
+      if (BUILDINGS[copyType].buildable !== false && !BUILDINGS[copyType].unique) h += `<button class="btn" data-act="copy" data-type="${copyType}" title="Build another (C)">➕ Build another</button>`;
       if (b.type !== 'townhall' && b.type !== 'sanctum') h += `<button class="btn bad" data-act="demolish">💥 Demolish</button>`;
       h += `</div>`;
     } else if (sel.kind === 'lair') {
@@ -188,6 +190,11 @@ export class UI {
     h += `<div class="kv"><span>Upkeep</span><b>💰${d.upkeep}/min</b></div>`;
     if (b.relicBoost) h += '';
     const boost = c.relicMult(b.type); if (boost > 1) h += `<div class="kv"><span>Relic boon</span><b>+${Math.round((boost - 1) * 100)}%</b></div>`;
+    if (b.type === 'cartographer') {
+      const err = c.expeditionError();
+      h += c.expedition ? `<div class="status ok">🧭 Expedition out: back in ${Math.ceil(c.expedition.back - c.time)}s</div>`
+        : `<div class="ibtns"><button class="btn good" data-act="expedition" ${err ? 'disabled' : ''}>🧭 Send an expedition (${costHtml(EXPEDITION.cost, c)})</button></div><p class="desc">${err && !/Cartographer/.test(err) ? esc(err) : 'Explorers return after 4 minutes with goods, gold, a charted deposit or a lair, sometimes a relic site.'}</p>`;
+    }
     return h;
   }
   publicHtml(b, d) {
@@ -200,6 +207,9 @@ export class UI {
     if (b.type === 'townhall') {
       h += `<div class="status ${c.hero.carry ? 'warn' : 'ok'}">${c.hero.carry ? '🎒 Your Founder carries a relic: walk to the Town Hall to enshrine it.' : `Relics enshrined: ${c.relics.length}/5`}</div>`;
       h += TIERS.map((t, i) => `<div class="kv"><span>${t.icon} ${t.name}</span><b>${c.tierUnlocked(i) ? Math.floor(c.pop[t.id]) : '🔒'}</b></div>`).join('');
+      const ferr = c.festivalError();
+      h += c.festivalUntil ? `<div class="status ok">🎉 Festival! ${Math.ceil(c.festivalUntil - c.time)}s left (+${FESTIVAL.happy} happiness)</div>`
+        : `<div class="ibtns"><button class="btn good" data-act="festival" ${ferr ? 'disabled' : ''}>🎉 Hold a festival (${costHtml(FESTIVAL.cost, c)})</button></div><p class="desc">${ferr ? esc(ferr) : `+${FESTIVAL.happy} happiness in every home for ${FESTIVAL.time / 60} minutes: more taxes.`}</p>`;
     }
     if (d.trade) {
       if (!c.caravan.here) h += `<div class="status warn">🐪 Next caravan in ${Math.ceil(c.caravan.t)}s.</div>`;
@@ -211,6 +221,42 @@ export class UI {
     }
     if (d.monument) h += `<div class="status ok">🏆 The Sanctum stands. The Wildwood is yours.</div>`;
     return h;
+  }
+
+  // ------------------------------------------------------------------ statistics screen
+  renderStats(tab = this.statsTab || 'goods') {
+    this.statsTab = tab;
+    const c = this.c, h = c.history || [], box = $('statsbody');
+    document.querySelectorAll('#statstabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
+    if (h.length < 2) { box.innerHTML = '<p class="desc">Statistics are sampled every 30 seconds. Check back in a minute.</p>'; return; }
+    const last = h.slice(-10), avg = (k, g) => last.reduce((a, s) => a + (s[k][g] || 0), 0) / last.length;
+    if (tab === 'goods') {
+      box.innerHTML = `<table class="stats"><tr><th>Good</th><th>Stock</th><th>Made /min</th><th>Used /min</th><th>Balance</th><th>Last hour</th></tr>` +
+        GOOD_KEYS.map(g => { const p = avg('prod', g), u = avg('cons', g), bal = p - u; if (!p && !u && !c.stock[g]) return '';
+          return `<tr class="${bal < -0.05 ? 'deficit' : ''}"><td>${GOODS[g].icon} ${GOODS[g].name}</td><td>${Math.floor(c.stock[g])}</td><td>${p.toFixed(1)}</td><td>${u.toFixed(1)}</td><td><b>${bal >= 0 ? '+' : ''}${bal.toFixed(1)}</b>${bal < -0.05 ? ' ⚠️' : ''}</td><td><canvas class="spark" data-good="${g}" width="120" height="26"></canvas></td></tr>`; }).join('') + '</table>' +
+        '<p class="desc">Averages over the last 5 minutes. ⚠️ means you use more than you make: build more producers or buy from caravans.</p>';
+      box.querySelectorAll('canvas.spark').forEach(cv => this.spark(cv, [h.map(s => s.prod[cv.dataset.good] || 0), h.map(s => s.cons[cv.dataset.good] || 0)], ['#3f8f3a', '#c0392b']));
+    } else if (tab === 'pop') {
+      box.innerHTML = `<canvas class="chart" width="640" height="220"></canvas><div class="legend">${TIERS.map((t, i) => `<span><i style="background:${['#c99a3a', '#2a7fd0', '#8e44ad'][i]}"></i>${t.icon} ${t.name} ${Math.floor(c.pop[t.id])}</span>`).join('')}</div>`;
+      this.spark(box.querySelector('canvas'), [0, 1, 2].map(i => h.map(s => s.pop[i])), ['#c99a3a', '#2a7fd0', '#8e44ad'], true);
+    } else {
+      box.innerHTML = `<canvas class="chart" width="640" height="220"></canvas><div class="legend"><span><i style="background:#3f8f3a"></i>Taxes /min</span><span><i style="background:#c0392b"></i>Upkeep /min</span><span><i style="background:#c99a3a"></i>Gold (scaled)</span></div>
+        <div class="kv"><span>Treasury</span><b>💰${Math.round(c.gold)}</b></div><div class="kv"><span>Balance</span><b>${(c.stats.income - c.stats.upkeep).toFixed(0)}/min</b></div>`;
+      const maxG = Math.max(1, ...h.map(s => s.gold)), maxI = Math.max(1, ...h.map(s => Math.max(s.income, s.upkeep)));
+      this.spark(box.querySelector('canvas'), [h.map(s => s.income), h.map(s => s.upkeep), h.map(s => s.gold / maxG * maxI)], ['#3f8f3a', '#c0392b', '#c99a3a'], true);
+    }
+    void HIST_EVERY;
+  }
+  spark(cv, series, colors, axes = false) {
+    const x = cv.getContext('2d'), w = cv.width, hgt = cv.height, pad = axes ? 22 : 2;
+    const max = Math.max(1e-6, ...series.flat()), n = Math.max(2, series[0].length);
+    x.clearRect(0, 0, w, hgt);
+    if (axes) { x.strokeStyle = '#0003'; x.fillStyle = '#5a4a30'; x.font = '11px system-ui'; for (let i = 0; i <= 4; i++) { const y = pad + (hgt - 2 * pad) * i / 4; x.beginPath(); x.moveTo(pad, y); x.lineTo(w - 4, y); x.stroke(); x.fillText(String(Math.round(max * (1 - i / 4))), 2, y - 2); } }
+    series.forEach((s, k) => {
+      x.strokeStyle = colors[k]; x.lineWidth = axes ? 2.5 : 1.6; x.beginPath();
+      s.forEach((v, i) => { const px = pad + (w - pad - 4) * i / (n - 1), py = hgt - pad - (hgt - 2 * pad) * v / max; i ? x.lineTo(px, py) : x.moveTo(px, py); });
+      x.stroke();
+    });
   }
 
   // ------------------------------------------------------------------ notifications

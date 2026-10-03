@@ -89,9 +89,11 @@ class Game {
 
   // ------------------------------------------------------------------ modes
   setMode(mode, type = null) {
+    if (mode !== 'road') this.paved = false;
     this.mode = mode; this.buildType = type;
     this.clearGhost();
-    $('tool-road').classList.toggle('on', mode === 'road');
+    $('tool-road').classList.toggle('on', mode === 'road' && !this.paved);
+    $('tool-paved').classList.toggle('on', mode === 'road' && !!this.paved);
     $('tool-demolish').classList.toggle('on', mode === 'demolish');
     this.world?.setTerritoryVisible(mode === 'build' || mode === 'road');
     this.ui?.renderBuild();
@@ -110,7 +112,7 @@ class Game {
     const el = $('modehint');
     let t = '';
     if (this.mode === 'build') t = `Placing <b>${BUILDINGS[this.buildType].name}</b>: click a green spot next to a road · right-click / Esc to stop`;
-    else if (this.mode === 'road') t = 'Roads: drag to paint (1 gold per tile) · right-click / Esc to stop';
+    else if (this.mode === 'road') t = this.paved ? 'Paved roads: drag to paint or pave dirt roads (1 brick + 2 gold per tile) · Esc to stop' : 'Roads: drag to paint (1 gold per tile) · right-click / Esc to stop';
     else if (this.mode === 'demolish') t = 'Demolish: click a building or road (goods are half refunded) · Esc to stop';
     if (err) t += `<br><span class="err">${err}</span>`;
     el.innerHTML = t; el.classList.toggle('hidden', !t);
@@ -169,14 +171,21 @@ class Game {
         return;
       }
       if (k === 'Escape') { if (this.mode !== 'select') this.setMode('select'); else if (this.selected) { this.selected = null; this.ui.renderInspector(); } else this.openMenu(); }
-      else if (k === 'KeyR') this.setMode(this.mode === 'road' ? 'select' : 'road');
+      else if (k === 'KeyR') this.roadTool(false);
+      else if (k === 'KeyP') this.roadTool(true);
+      else if (k === 'KeyO') this.openStats();
+      else if (k === 'KeyC') this.copyHovered();
       else if (k === 'KeyX') this.setMode(this.mode === 'demolish' ? 'select' : 'demolish');
       else if (k === 'Space') { e.preventDefault(); this.setSpeed(this.speed ? 0 : 1); }
       else if (k === 'Digit1') this.setSpeed(1); else if (k === 'Digit2') this.setSpeed(2); else if (k === 'Digit3') this.setSpeed(4);
       else if (k === 'KeyM') $('minimapwrap').classList.toggle('hidden');
       else if (k === 'F1') { e.preventDefault(); show('help'); }
     });
-    $('tool-road').onclick = () => this.setMode(this.mode === 'road' ? 'select' : 'road');
+    $('tool-road').onclick = () => this.roadTool(false);
+    $('tool-paved').onclick = () => this.roadTool(true);
+    $('b-stats').onclick = () => this.openStats();
+    $('statstabs').querySelectorAll('button').forEach(b => { b.onclick = () => { $('statstabs').querySelectorAll('button').forEach(q => q.classList.toggle('on', q === b)); this.ui.renderStats(b.dataset.tab); }; });
+    $('b-statsclose').onclick = () => { show('none'); this.setSpeed(this.prevSpeed || 1); };
     $('tool-demolish').onclick = () => this.setMode(this.mode === 'demolish' ? 'select' : 'demolish');
     $('tool-hero').onclick = () => this.setHeroMode(!this.heroMode);
     $('tool-map').onclick = () => {
@@ -186,6 +195,27 @@ class Game {
       this.cam.focus(x, z, 0.6); this.sfx.magic(); this.ui.notify('The map reveals a relic site!', 'good');
     };
     $('b-menu').onclick = () => this.openMenu();
+  }
+
+  roadTool(paved) {
+    if (this.mode === 'road' && !!this.paved === paved) return this.setMode('select');
+    this.paved = paved; this.setMode('road');
+  }
+  openStats() {
+    this.prevSpeed = this.speed || this.prevSpeed || 1; this.setSpeed(0);
+    const tab = this.ui.statsTab || 'goods';
+    $('statstabs').querySelectorAll('button').forEach(q => q.classList.toggle('on', q.dataset.tab === tab));
+    this.ui.renderStats(tab); show('stats');
+  }
+  /** Anno-style copy: C over a building starts placing another of its type. */
+  copyHovered() {
+    const c = this.colony, p = this.mouse && this.pick(this.mouse);
+    const sel = p && p.tile[0] >= 0 && p.tile[1] >= 0 && p.tile[0] < W && p.tile[1] < H ? c.buildings.get(c.occ[p.tile[1] * W + p.tile[0]]) : null;
+    const b = sel || (this.selected?.kind === 'building' ? c.buildings.get(this.selected.id) : null);
+    if (!b) return;
+    const type = BUILDINGS[b.type].tier != null || b.tier != null ? 'hut' : b.type;
+    if (BUILDINGS[type].buildable === false || BUILDINGS[type].unique) return this.ui.notify(`Only one ${BUILDINGS[type].name} can exist.`, 'warn');
+    this.startBuild(type);
   }
 
   focusTile(tx, ty) { const [x, z] = tileToWorld(tx, ty); this.cam.focus(x, z); }
@@ -242,18 +272,22 @@ class Game {
     const okM = new THREE.MeshBasicMaterial({ color: 0xffe27a, transparent: true, opacity: 0.6, depthWrite: false }), badM = new THREE.MeshBasicMaterial({ color: 0xff5a4a, transparent: true, opacity: 0.5, depthWrite: false });
     let cost = 0, bad = 0;
     for (const [x, y] of tiles) {
-      const existing = c.road[y * W + x] === 1;
-      const err = existing ? '' : c.placeError('road', x, y) || (c.depositAt(x, y) ? 'deposit' : '');
+      const lvl = c.road[y * W + x], existing = this.paved ? lvl === 2 : lvl > 0;
+      const err = existing || (this.paved && lvl === 1) ? '' : c.placeError('road', x, y) || (c.depositAt(x, y) ? 'deposit' : '');
       if (!existing && !err) cost++; if (err) bad++;
       const m = new THREE.Mesh(new THREE.PlaneGeometry(TILE * 0.8, TILE * 0.8).rotateX(-Math.PI / 2), err ? badM : okM);
       const [wx, wz] = tileToWorld(x, y); m.position.set(wx, 0.2, wz); g.add(m);
     }
     this.roadPreview = g; this.scene.add(g);
-    this.updateModeHint(`${cost} new tiles · 💰${cost}${bad ? ` · ${bad} blocked` : ''}`);
+    this.updateModeHint(this.paved ? `${cost} tiles to pave · 🧱${cost} 💰${cost * 2}${bad ? ` · ${bad} blocked` : ''}` : `${cost} new tiles · 💰${cost}${bad ? ` · ${bad} blocked` : ''}`);
   }
   placeRoad() {
     const tiles = this.roadTiles(); let n = 0, last = '';
-    for (const [x, y] of tiles) { if (this.colony.road[y * W + x]) continue; const r = this.colony.buildRoad(x, y); if (r.error) last = r.error; else n++; }
+    for (const [x, y] of tiles) {
+      const lvl = this.colony.road[y * W + x];
+      if (this.paved ? lvl === 2 : lvl) continue;
+      const r = this.colony.buildRoad(x, y, !!this.paved); if (r.error) { last = r.error; if (this.paved && r.error.startsWith('Paving')) break; } else n++;
+    }
     this.roadDrag = null; if (this.roadPreview) { this.scene.remove(this.roadPreview); this.roadPreview = null; }
     if (n) this.sfx.step(); else if (last) this.ui.notify(last, 'warn');
     this.updateModeHint();
@@ -297,6 +331,9 @@ class Game {
     else if (act === 'demolish') { r = c.demolish(b.x, b.y); this.selected = null; this.sfx.shatter(); }
     else if (act === 'buy' || act === 'sell') { r = c.trade(data.good, act === 'buy' ? 5 : -5); if (!r.error) this.sfx.clang(); }
     else if (act === 'hero') this.setHeroMode(true);
+    else if (act === 'festival') r = c.festival();
+    else if (act === 'expedition') r = c.startExpedition();
+    else if (act === 'copy') { this.selected = null; this.ui.renderInspector(); return this.startBuild(data.type); }
     if (r?.error) this.ui.notify(r.error, 'warn');
     this.ui.renderInspector(); this.ui.renderTop();
   }
@@ -333,6 +370,8 @@ class Game {
         case 'removed': case 'territory': case 'fog': case 'road': this.ui.mmDirty = true; this.buildDirty = true; break;
         case 'relic': this.buildDirty = true; break;
         case 'quest': this.sfx.chime(); break;
+        case 'festival': this.sfx.chime(); this.sfx.magic(); break;
+        case 'expedition': if (e.out) this.sfx.step(); else this.sfx.magic(); this.ui.mmDirty = true; break;
         case 'victory': this.victory(); break;
       }
       if (e.type === 'built' || e.type === 'upgraded') { this.ui.mmDirty = true; this.buildDirty = true; }
@@ -376,6 +415,20 @@ class Game {
       if (burning) { const p = new THREE.Vector3(...this.worldOf(b, 1.5)); this.fx.burst(p, { tex: 'smoke_07_a', color: 0x40342c, count: 2, speed: 2, life: 2.2, size: 3, additive: false, gravity: 1.2, spread: 0.4 }); this.fx.burst(p, { tex: 'spark_01_a', color: 0xff8a3a, count: 3, speed: 3, life: 0.8, size: 0.6, gravity: 2 }); continue; }
       if (!o.smokes.length || !(b.running || b.tier != null) || Math.random() < 0.4) continue;
       for (const s of o.smokes) { const p = s.getWorldPosition(new THREE.Vector3()); this.fx.burst(p, { tex: 'smoke_01_a', color: 0xe8e2da, count: 1, speed: 0.8, life: 2.5, size: 1.1, additive: false, gravity: 0.7, spread: 0.2, drag: 0.98 }); }
+    }
+  }
+
+  /** Festival VFX: confetti bursts over the Town Hall, Market and Tavern while it lasts. */
+  confetti(dt) {
+    const c = this.colony;
+    if (!(c.festivalUntil > c.time) || (this.confT = (this.confT || 0) - dt) > 0) return;
+    this.confT = 0.5;
+    const cols = [0xff5a6a, 0xffd54a, 0x6ad0ff, 0x8aff7a, 0xd88aff];
+    for (const b of c.buildings.values()) {
+      if (!['townhall', 'market', 'tavern'].includes(b.type) || Math.random() < 0.4) continue;
+      const p = new THREE.Vector3(...this.worldOf(b, 6));
+      p.x += (Math.random() - 0.5) * 4; p.z += (Math.random() - 0.5) * 4;
+      this.fx.burst(p, { tex: 'star_06_a', color: cols[Math.floor(Math.random() * cols.length)], count: 8, speed: 3, life: 1.6, size: 0.5, gravity: 2.5 });
     }
   }
 
@@ -430,6 +483,7 @@ class Game {
     this.adv.update(raw * (this.speed ? 1 : 0), this.cam.keys, this.cam.moveYaw, this.heroMode);
     this.fx.update(raw);
     this.smoke(raw * (this.speed ? 1 : 0));
+    this.confetti(raw * (this.speed ? 1 : 0));
     this.cam.update(raw, !!document.querySelector('.screen.active'));
     this.dayNight(raw);
     this.ambience.update(raw);

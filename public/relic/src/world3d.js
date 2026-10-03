@@ -159,30 +159,42 @@ export class World3D {
   clearDecor(x, y) { const k = idx(x, y); for (const d of this.decor) d.remove(k); }
 
   // ------------------------------------------------------------------ roads
-  roadMaterial() {
-    if (this._roadMat) return this._roadMat;
+  roadMaterial(paved = false) {
+    const key = paved ? '_pavedMat' : '_roadMat';
+    if (this[key]) return this[key];
     const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d');
-    g.fillStyle = '#b8976a'; g.fillRect(0, 0, 64, 64);
-    for (let i = 0; i < 140; i++) { g.fillStyle = Math.random() < 0.5 ? '#9c7c52' : '#cdb088'; g.fillRect(Math.random() * 64, Math.random() * 64, 2 + Math.random() * 3, 2 + Math.random() * 2); }
+    if (paved) {
+      g.fillStyle = '#8f877c'; g.fillRect(0, 0, 64, 64);
+      for (let row = 0; row < 4; row++) for (let col = 0; col < 4; col++) {
+        const x = col * 16 + (row % 2 ? 8 : 0), y = row * 16, sh = 150 + Math.floor(Math.random() * 40);
+        g.fillStyle = `rgb(${sh},${sh - 6},${sh - 14})`; g.fillRect(x + 1, y + 1, 14, 14); g.fillRect(x - 15, y + 1, 14, 14);
+      }
+    } else {
+      g.fillStyle = '#b8976a'; g.fillRect(0, 0, 64, 64);
+      for (let i = 0; i < 140; i++) { g.fillStyle = Math.random() < 0.5 ? '#9c7c52' : '#cdb088'; g.fillRect(Math.random() * 64, Math.random() * 64, 2 + Math.random() * 3, 2 + Math.random() * 2); }
+    }
     const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping;
-    return this._roadMat = new THREE.MeshStandardMaterial({ map: t, roughness: 1, polygonOffset: true, polygonOffsetFactor: -2 });
+    return this[key] = new THREE.MeshStandardMaterial({ map: t, roughness: paved ? 0.8 : 1, polygonOffset: true, polygonOffsetFactor: paved ? -3 : -2 });
   }
   rebuildRoads() {
     this.roads.clear();
-    const tiles = []; for (let i = 0; i < W * H; i++) if (this.c.road[i]) tiles.push(i);
-    if (!tiles.length) return;
-    const centers = new THREE.InstancedMesh(new THREE.PlaneGeometry(1.5, 1.5).rotateX(-Math.PI / 2), this.roadMaterial(), tiles.length);
-    const links = new THREE.InstancedMesh(new THREE.PlaneGeometry(1.5, 1.1).rotateX(-Math.PI / 2), this.roadMaterial(), tiles.length * 2);
-    const m = new THREE.Matrix4(); let n = 0;
-    tiles.forEach((k, i) => {
-      const x = k % W, y = (k / W) | 0, [wx, wz] = tileToWorld(x, y);
-      centers.setMatrixAt(i, m.makeTranslation(wx, 0.04, wz));
-      if (x + 1 < W && this.c.road[k + 1]) links.setMatrixAt(n++, new THREE.Matrix4().makeRotationY(Math.PI / 2).setPosition(wx + 1, 0.035, wz));
-      if (y + 1 < H && this.c.road[k + W]) links.setMatrixAt(n++, m.makeTranslation(wx, 0.035, wz + 1));
-    });
-    links.count = n;
-    centers.receiveShadow = links.receiveShadow = true;
-    this.roads.add(centers, links);
+    for (const paved of [false, true]) {
+      const lvl = paved ? 2 : 1, tiles = []; for (let i = 0; i < W * H; i++) if (this.c.road[i] === lvl) tiles.push(i);
+      if (!tiles.length) continue;
+      const centers = new THREE.InstancedMesh(new THREE.PlaneGeometry(1.5, 1.5).rotateX(-Math.PI / 2), this.roadMaterial(paved), tiles.length);
+      const links = new THREE.InstancedMesh(new THREE.PlaneGeometry(1.5, 1.1).rotateX(-Math.PI / 2), this.roadMaterial(paved), tiles.length * 2);
+      const m = new THREE.Matrix4(), y0 = paved ? 0.05 : 0.04; let n = 0;
+      tiles.forEach((k, i) => {
+        const x = k % W, y = (k / W) | 0, [wx, wz] = tileToWorld(x, y);
+        centers.setMatrixAt(i, m.makeTranslation(wx, y0, wz));
+        // link to any road neighbour; a paved link only between two paved tiles
+        if (x + 1 < W && this.c.road[k + 1] >= lvl) links.setMatrixAt(n++, new THREE.Matrix4().makeRotationY(Math.PI / 2).setPosition(wx + 1, y0 - 0.005, wz));
+        if (y + 1 < H && this.c.road[k + W] >= lvl) links.setMatrixAt(n++, m.makeTranslation(wx, y0 - 0.005, wz + 1));
+      });
+      links.count = n;
+      centers.receiveShadow = links.receiveShadow = true;
+      this.roads.add(centers, links);
+    }
   }
 
   // ------------------------------------------------------------------ fog of war + territory overlay

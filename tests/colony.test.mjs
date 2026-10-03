@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { Colony } from '../public/relic/src/sim.js';
 import { generateWorld, reachable, idx, T } from '../public/relic/src/map.js';
-import { BUILDINGS, TIERS, W, H, LOCAL_CAP, DIFFICULTY, GRANT_POP } from '../public/relic/src/data.js';
+import { BUILDINGS, TIERS, W, H, LOCAL_CAP, DIFFICULTY, GRANT_POP, FESTIVAL, EXPEDITION, HIST_EVERY } from '../public/relic/src/data.js';
 import { Bot, playthrough } from './colony-bot.mjs';
 
 const fresh = (seed = 3) => { const c = new Colony({ seed }); return { c, bot: new Bot(c), th: c.ofType('townhall')[0] }; };
@@ -175,6 +175,46 @@ const fresh = (seed = 3) => { const c = new Colony({ seed }); return { c, bot: n
   assert.equal(g.grant, false, `grant ends at ${GRANT_POP} residents`);
   assert.equal(Colony.load(e.save()).difficulty, 'easy', 'difficulty saved');
   console.log('ok difficulty (easy/hard scaling, saved) and founding grant (half upkeep until 40 residents)');
+}
+
+{ // paved roads make carriers faster
+  const { c, bot } = fresh();
+  for (let i = 0; i < 3; i++) bot.place('hut'); bot.place('market');
+  const lj = bot.place('lumberjack', undefined, undefined, (x, y) => bot.treesNear(x, y));
+  c.step(1);
+  const dirt = lj.roadLen;
+  assert.match(c.buildRoad(0, 0, true).error || '', /territory|Unexplored|Rock|map/i);
+  c.stock.bricks = 200; c.gold += 500;
+  let paved = 0;
+  for (let i = 0; i < W * H; i++) if (c.road[i] === 1) { const r = c.buildRoad(i % W, (i / W) | 0, true); assert.ok(!r.error, r.error); paved++; }
+  c.step(1);
+  assert.ok(paved > 0 && lj.roadLen < dirt, `paved trip is shorter (${dirt.toFixed(1)} → ${lj.roadLen.toFixed(1)})`);
+  assert.ok([...c.road].every(v => v !== 1), 'all paved');
+  console.log(`ok paved roads (${paved} tiles, carrier leg ${dirt.toFixed(1)} → ${lj.roadLen.toFixed(1)} tiles)`);
+}
+
+{ // festival, expeditions and statistics history
+  const { c, bot } = fresh();
+  for (let i = 0; i < 4; i++) bot.place('hut'); bot.place('market'); c.stock.food = 40;
+  c.step(60);
+  const h0 = c.ofType('hut')[0].happiness;
+  assert.ok(!c.festival().error); c.step(1);
+  assert.equal(c.ofType('hut')[0].happiness, Math.min(100, h0 + FESTIVAL.happy), 'festival lifts happiness');
+  assert.match(c.festival().error, /already/);
+  c.step(FESTIVAL.time + 1); assert.equal(c.festivalUntil, 0);
+  assert.match(c.festivalError(), /recover/);
+  assert.match(c.expeditionError(), /Cartographer/);
+  // expeditions: deterministic for the same colony state
+  const run = () => { const d = new Colony({ seed: 4 }), db = new Bot(d); d.peak.settlers = 40; db.fetchRelic(); d.gold += 3000; d.stock.planks = 30; d.stock.bricks = 20; d.stock.food = 30; d.stock.maps = 3;
+    for (let i = 0; i < 6; i++) db.place('hut'); db.place('market'); db.place('cartographer'); d.step(2);
+    assert.equal(d.expeditionError(), ''); d.startExpedition(); d.step(EXPEDITION.time + 2); return d.events.filter(e => e.type === 'expedition' && !e.out).map(e => e.text); };
+  const a = run(), b = run();
+  assert.equal(a.length, 1); assert.deepEqual(a, b, 'same outcome for the same state');
+  assert.ok(c.history.length >= Math.floor(c.time / HIST_EVERY) - 1 && c.history.at(-1).pop.length === 3, 'history sampled');
+  c.step(360); assert.ok(c.history.some(s => s.cons.food > 0), 'food consumption recorded');
+  const back = Colony.load(c.save());
+  assert.equal(back.history.length, c.history.length); assert.equal(back.festivalReady, c.festivalReady);
+  console.log(`ok festival, expedition ("${a[0]}") and statistics (${c.history.length} samples)`);
 }
 
 { // save / load round trip

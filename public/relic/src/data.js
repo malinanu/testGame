@@ -144,7 +144,10 @@ export const DIFFICULTY = {
   normal: { name: 'Settler',  gold: 1500, upkeep: 1,    tax: 1,    raidEvery: 1,   grace: 1500, fire: 1 },
   hard:   { name: 'Pioneer',  gold: 1000, upkeep: 1.2,  tax: 0.9,  raidEvery: 0.7, grace: 1080, fire: 0.75 },
 };
-export const GRANT_POP = 40;            // upkeep is halved until the colony first reaches this many residents
+export const GRANT_POP = 40;
+export const FESTIVAL = { cost: { gold: 300, food: 12 }, time: 180, cooldown: 420, happy: 25 };
+export const EXPEDITION = { cost: { gold: 200, maps: 1, food: 10 }, time: 240 };
+export const HIST_EVERY = 30, HIST_MAX = 120;   // statistics: one sample per 30 s, last hour kept            // upkeep is halved until the colony first reaches this many residents
 export const START = { gold: 1500, stock: { planks: 30, logs: 10, food: 20, tools: 8, bricks: 4 } };
 export const CARRIER_SPEED = 4;       // tiles / second along roads
 export const LOCAL_CAP = 4;             // output buffer per building

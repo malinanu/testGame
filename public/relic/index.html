@@ -25,6 +25,7 @@
       <div id="relicbar" data-tip="relics"></div>
       <div id="clock" data-tip="clock">☀️</div>
       <div class="speed" id="speed"><button data-s="0" title="Pause (Space)">⏸</button><button data-s="1" class="on" title="Normal (1)">▶</button><button data-s="2" title="Fast (2)">⏩</button><button data-s="4" title="Fastest (3)">⏭</button></div>
+      <button class="tbtn" id="b-stats" title="Statistics (O)">📊</button>
       <button class="tbtn" id="b-menu" title="Menu (Esc)">☰</button>
     </div>
   </header>
@@ -43,6 +44,7 @@
   </nav>
   <div id="tools">
     <button class="tool" id="tool-road" title="Build roads (R): drag to paint">🛤️<span>Road</span><kbd>R</kbd></button>
+    <button class="tool" id="tool-paved" title="Paved roads (P): 1 brick + 2 gold per tile, carriers walk 50% faster. Drag over dirt roads to pave them.">🧱<span>Paved road</span><kbd>P</kbd></button>
     <button class="tool" id="tool-demolish" title="Demolish (X)">💥<span>Demolish</span><kbd>X</kbd></button>
     <button class="tool" id="tool-map" title="Use a Map: reveal the way to a relic">🗺️<span>Map</span><b id="mapcount">0</b></button>
     <button class="tool hero" id="tool-hero" title="Take the field with your Founder (H)">⚔️<span>Take the field</span><kbd>H</kbd></button>
@@ -96,7 +98,7 @@
       <div><b>💰 Gold</b>Taxes minus upkeep is shown next to your gold. Keep it positive! The Trading Post lets caravans buy your surplus and sell what you lack.</div>
       <div><b>🏆 Victory</b>Hold all five relics, reach 250 residents and build the Relic Sanctum.</div>
     </div>
-    <p class="small"><b>Controls:</b> WASD / edge scroll pan · wheel zoom · Q/E or right-drag rotate · R road · X demolish · H hero · Space pause · 1/2/3 speed · Esc cancel · M minimap</p>
+    <p class="small"><b>Controls:</b> WASD / edge scroll pan · wheel zoom · Q/E or right-drag rotate · R road · P paved road · C copy hovered building · X demolish · H hero · O statistics · Space pause · 1/2/3 speed · Esc cancel · M minimap</p>
     <button id="b-helpclose" class="startbtn">Got it</button>
   </div>
 </section>
@@ -110,6 +112,15 @@
     <button class="btn big" id="m-sound">🔊 Sound: on</button>
     <button class="btn big" id="m-title">Title screen</button>
     <a class="btn big" href="../">⟵ Games</a>
+  </div>
+</section>
+
+<section id="screen-stats" class="screen dim">
+  <div class="helpbox statsbox">
+    <h2>📊 Statistics</h2>
+    <div id="statstabs" class="seg"><button data-tab="goods" class="on">Goods</button><button data-tab="pop">Population</button><button data-tab="finance">Finance</button></div>
+    <div id="statsbody"></div>
+    <button id="b-statsclose" class="startbtn">Close</button>
   </div>
 </section>
 

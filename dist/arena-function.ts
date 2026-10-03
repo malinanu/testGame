@@ -487,8 +487,10 @@ var Battle = class {
       await this.endTurn();
       return true;
     }
-    const u = this.units[a.u];
-    if (!u || u.side !== human) return false;
+    const u = Number.isInteger(a.u) ? this.units[a.u] : null;
+    if (!u || u.side !== human || !Number.isInteger(a.x) || !Number.isInteger(a.y)) return false;
+    if (a.t === "a" && (typeof a.id !== "string" || !Object.hasOwn(ABIL, a.id) || !this.abilities(u).includes(a.id))) return false;
+    if (!this.g.in(a.x, a.y)) return false;
     return a.t === "m" ? this.move(u, a.x, a.y) : a.t === "a" ? this.use(u, a.id, a.x, a.y) : false;
   }
   /** Consumable stock of one side. */
@@ -520,7 +522,7 @@ var Battle = class {
   }
   canUse(u, id) {
     const a = ABIL[id];
-    if (!u.alive || this.over) return false;
+    if (!a || !u.alive || this.over) return false;
     if (a.free) return !u.stanced;
     if (a.consumable && !(this.stock(u.side)[a.consumable] > 0)) return false;
     return !u.acted && !(u.cd[id] > 0);
@@ -850,9 +852,9 @@ var Battle = class {
     this.startPhase("enemy");
     await this.view.banner?.("Enemy Turn");
     await this.runAI("enemy");
-    if (this.over) return;
+    if (this.over || this.aborted) return;
     await this.endOfTurn("enemy");
-    if (this.over) return;
+    if (this.over || this.aborted) return;
     let changed = false;
     for (let i = 0; i < this.g.fire.length; i++) if (this.g.fire[i]) {
       this.g.fire[i]--;
@@ -875,7 +877,7 @@ var Battle = class {
   async runAI(side) {
     const order = this.alive(side).sort((a, b) => CLASSES[a.cls].prefer - CLASSES[b.cls].prefer);
     for (const u of order) {
-      if (this.over) return;
+      if (this.over || this.aborted) return;
       if (!u.alive || u.moved && u.acted) continue;
       await this.view.focusUnit?.(u);
       await this.aiTurn(u);
@@ -1391,7 +1393,7 @@ function createCore(store) {
       p.herbs += got.herbs;
       p.berries += got.berries;
       p.harvestedAt = now();
-      await store.putProfile(p);
+      if (store.putProfileIf ? !await store.putProfileIf(p) : (await store.putProfile(p), false)) fail("Busy, try again.");
       return state(p, { harvested: got });
     },
     async craft(uid, { recipe } = {}) {
@@ -1431,11 +1433,12 @@ function createCore(store) {
     async startRaid(uid, { defenderId, party, consumables = {} } = {}) {
       const p = await mustProfile(uid);
       if (!Array.isArray(party) || party.length !== 4 || party.some((c) => !CLASSES[c])) fail("Pick a raiding party of 4.");
-      const open = await store.openRaidOf(uid);
-      if (open) await resolve(open, null, "abandoned");
       if (defenderId === uid) fail("You cannot raid yourself.");
       const def = await store.getProfile(defenderId), sh = await store.getStronghold(defenderId);
       if (!def || !sh) fail("That stronghold is gone.");
+      const open = await store.openRaidOf(uid);
+      if (open && open.defender === defenderId && now() - open.createdAt < 15e3) return { raid: publicRaid(open), league: league(def.rating) };
+      if (open) await resolve(open, null, "abandoned");
       const cons = {};
       for (const k of Object.keys(RAID_CARRY)) {
         const n = Math.max(0, Math.min(RAID_CARRY[k], consumables[k] | 0));
@@ -1476,6 +1479,15 @@ function createCore(store) {
     }
   };
   async function resolve(raid, log, reason) {
+    if (store.claimRaid && !await store.claimRaid(raid.id)) fail("This raid is already settled.");
+    try {
+      return await settle(raid, log, reason);
+    } catch (e) {
+      await store.releaseRaid?.(raid.id);
+      throw e;
+    }
+  }
+  async function settle(raid, log, reason) {
     let result = "lose", rounds = 0, valid = true;
     if (log) {
       const setup = buildRaid({ attack: raid.attack, defense: raid.defense, seed: raid.seed });
@@ -1546,7 +1558,15 @@ function createSupabaseStore(sb, { clock = () => Date.now() } = {}) {
     now: clock,
     newId: () => crypto.randomUUID(),
     async getProfile(id) {
-      return must(await sb.from(P).select("data").eq("id", id).maybeSingle())?.data ?? null;
+      const row = must(await sb.from(P).select("data, updated_at").eq("id", id).maybeSingle());
+      if (!row) return null;
+      Object.defineProperty(row.data, "_v", { value: row.updated_at, enumerable: false });
+      return row.data;
+    },
+    /** Optimistic write: only if the row is unchanged since getProfile (two parallel requests cannot both win). */
+    async putProfileIf(p) {
+      const got = must(await sb.from(P).update({ name: p.name, rating: p.rating, is_bot: !!p.isBot, data: p, updated_at: new Date(Math.max(clock(), Date.parse(p._v || 0) + 1)).toISOString() }).eq("id", p.id).eq("updated_at", p._v).select("id"));
+      return (got || []).length === 1;
     },
     async putProfile(p) {
       must(await sb.from(P).upsert({ id: p.id, name: p.name, rating: p.rating, is_bot: !!p.isBot, data: p, updated_at: new Date(clock()).toISOString() }));
@@ -1577,6 +1597,13 @@ function createSupabaseStore(sb, { clock = () => Date.now() } = {}) {
     },
     async putRaid(r) {
       must(await sb.from(R).upsert({ id: r.id, attacker: r.attacker, defender: r.defender, status: r.status, created_at: r.createdAt, finished_at: r.finishedAt ?? null, data: r }));
+    },
+    /** Atomically move a raid from open to settling: only one request can settle it. */
+    async claimRaid(id) {
+      return (must(await sb.from(R).update({ status: "settling" }).eq("id", id).eq("status", "open").select("id")) || []).length === 1;
+    },
+    async releaseRaid(id) {
+      must(await sb.from(R).update({ status: "open" }).eq("id", id).eq("status", "settling"));
     },
     async openRaidOf(attacker) {
       return rows(await sb.from(R).select("data").eq("attacker", attacker).eq("status", "open").limit(1))[0] ?? null;

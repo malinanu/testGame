@@ -281,6 +281,33 @@ boss, an elite squad called the Hollow Crown.
 - `net.js`: online duels (`OnlineMatch`, Supabase / BroadcastChannel transports, room codes, quick match, gap repair)
 - `main.js`: screens, game modes and the online lobby
 
+## Performance on mid-range devices
+All four games share the loader and character code, so these apply everywhere:
+- **Loading.** `THREE.Cache` is on, and each pack's texture atlas is decoded and uploaded once, not once per model
+  file. In the colony this cuts GPU textures from 171 to 36 and load time from about 12 s to 3 s (headless test).
+- **Characters.** The 7–9 skinned parts of each KayKit character are merged into one mesh at load, so each
+  actor is one draw call. Animation clips are created on first use.
+- **Particles** are recycled from a pool, capped by quality.
+- **Phones and 4-core machines** get lighter defaults: no MSAA in the colony on Low, lower pixel ratios and
+  smaller shadow maps in Chess and Tactics, and two torch lights instead of five in Chess (none on phones).
+
+In the colony:
+- Buildings of a type share one baked model.
+- Off-screen villagers are hidden and animate at 4 Hz, and only villagers near the view cast shadows.
+- The shadow map refreshes every 1–4 frames depending on quality.
+- The scene renders at about 10 fps behind menus.
+- Labels, the build menu and the inspector only touch the DOM when something changed.
+- The previous game's GPU memory is freed when a new one starts.
+
+**Measured** in headless Chromium with a software renderer, on a bot-grown town (Medium quality):
+- draw calls: 527 / 640 / 567 → 379 / 474 / 401 at street / mid / overview zoom
+- JS heap: 110 → 83 MB
+
+Real-GPU frame rates still need checking on actual devices.
+
+**Touch** works in every game: one-finger orbit or pan, pinch zoom, tap to select. The Tactics and Chess
+HUDs have phone layouts.
+
 ## Asset notes
 - The free Adventurers pack has no attack or sit animations. Attacks are procedural lunges and weapon swings layered on
   the `Use_Item`/`Throw` clips.

@@ -28,9 +28,16 @@ export function abilityBlurb(a, u) {
 }
 
 export class BattleController {
-  /** opts: { enemyName, onFinish() } — onFinish runs once the battle is over. */
-  constructor(view, battle, { enemyName = '', onFinish = () => {} } = {}) {
+  /**
+   * opts: { enemyName, onFinish() } — onFinish runs once the battle is over.
+   * Versus play (battle.pvp): localSides lists the sides commanded on this screen (both for hot-seat,
+   * one for online), names = { player, enemy } labels them, onCommand(cmd) receives every command made
+   * here (to send to the opponent), onTurn(side) fires when a local side's turn begins.
+   */
+  constructor(view, battle, { enemyName = '', onFinish = () => {}, localSides = ['player'], names = null, onCommand = null, onTurn = null } = {}) {
     this.b = battle; this.v = view; this.enemyName = enemyName; this.onFinish = onFinish;
+    this.localSides = localSides; this.names = names || { player: 'You', enemy: enemyName || 'Enemy' };
+    this.onCommand = onCommand; this.onTurn = onTurn; this.remoteQ = Promise.resolve();
     this.sel = null; this.mode = null; this.busy = false; this.hoverT = null; this.danger = false;
     this.listeners = {}; this.guard = null; this.hintOverride = null;
     this.v.onClick = t => this.click(t);
@@ -58,8 +65,12 @@ export class BattleController {
     for (const u of this.b.units) this.v.setReady?.(u, false);
   }
 
-  players() { return this.b.units.filter(u => u.side === 'player' && u.alive); }
-  ready(u) { return !!u && u.alive && u.side === 'player' && (!u.moved || !u.acted); }
+  /** The side this screen is commanding right now (the side whose roster is shown). */
+  get side() { return this.localSides.includes(this.b.phase) ? this.b.phase : this.localSides[0]; }
+  myTurn() { return !this.b.over && this.localSides.includes(this.b.phase); }
+  sideName(side) { return this.names[side] || side; }
+  players() { return this.b.units.filter(u => u.side === this.side && u.alive); }
+  ready(u) { return !!u && u.alive && u.side === this.side && (!u.moved || !u.acted); }
 
   selectNext(from = this.sel) {
     const list = this.players(), start = Math.max(0, list.indexOf(from));
@@ -76,7 +87,7 @@ export class BattleController {
 
   setMode(id) {
     const u = this.sel;
-    if (!u || this.busy || this.b.phase !== 'player' || !this.b.canUse(u, id)) return;
+    if (!u || this.busy || !this.myTurn() || !this.b.canUse(u, id)) return;
     if (!this.allowed('mode', id)) return;
     const a = ABIL[id];
     if (a.free || a.kind === 'cleave') { this.act(() => this.b.use(u, id, u.x, u.y), { kind: 'ability', id }); return; }
@@ -91,7 +102,7 @@ export class BattleController {
   dangerTiles() {
     const b = this.b, g = b.g, out = new Set();
     for (const e of b.units) {
-      if (!e.alive || e.side !== 'enemy') continue;
+      if (!e.alive || e.side === this.side) continue;
       const atks = b.abilities(e).filter(id => ['attack', 'cleave', 'aoe'].includes(ABIL[id].kind) && ABIL[id].dmg);
       const spots = e.stun > 0 || e.behavior === 'hold' ? [[e.x, e.y]] : [...b.reach(e)].filter(([, s]) => s.stop).map(([k]) => g.xy(k));
       for (const [sx, sy] of spots) for (const id of atks) {
@@ -108,8 +119,8 @@ export class BattleController {
 
   refresh() {
     const b = this.b, u = this.sel, hl = [];
-    if (this.danger && b.phase === 'player') for (const k of this.dangerTiles()) hl.push([k % b.g.w, (k / b.g.w) | 0, COLORS.danger]);
-    if (u && !this.busy && b.phase === 'player') {
+    if (this.danger && this.myTurn()) for (const k of this.dangerTiles()) hl.push([k % b.g.w, (k / b.g.w) | 0, COLORS.danger]);
+    if (u && !this.busy && this.myTurn()) {
       if (this.mode) {
         const a = ABIL[this.mode];
         const col = a.kind === 'heal' ? COLORS.heal : a.kind === 'aoe' ? COLORS.area : COLORS.attack;
@@ -126,7 +137,7 @@ export class BattleController {
     for (const extra of this.extraHighlights || []) hl.push(extra);
     this.v.setHighlights(hl);
     this.v.setSelected(u);
-    for (const o of b.units) this.v.setReady?.(o, b.phase === 'player' && !this.busy && this.ready(o));
+    for (const o of b.units) this.v.setReady?.(o, this.myTurn() && !this.busy && this.ready(o));
     if (!this.mode) this.v.showBadge?.(null);
     this.renderHud();
   }
@@ -135,11 +146,14 @@ export class BattleController {
   hintText() {
     if (this.hintOverride) return this.hintOverride;
     const b = this.b, u = this.sel;
-    if (b.over) return b.result === 'win' ? 'Victory!' : 'Defeat…';
-    if (b.phase !== 'player') return this.enemyLine || 'Enemy turn: watch what they do…';
+    if (b.over) {
+      if (!b.pvp) return b.result === 'win' ? 'Victory!' : 'Defeat…';
+      return `🏆 ${esc(this.sideName(b.result === 'win' ? 'player' : 'enemy'))} wins!`;
+    }
+    if (!this.myTurn()) return b.pvp ? `⏳ Waiting for ${esc(this.sideName(b.phase))} to move…` : this.enemyLine || 'Enemy turn: watch what they do…';
     if (this.busy) return '…';
     const ready = this.players().filter(o => this.ready(o));
-    if (!ready.length) return '✅ Everyone has acted. Press End Turn (Enter) to let the enemy move.';
+    if (!ready.length) return `✅ Everyone has acted. Press End Turn (Enter) to let ${b.pvp ? esc(this.sideName(this.foeSide())) : 'the enemy'} move.`;
     if (!u || !this.ready(u)) return `👆 Click one of your heroes (blue rings). ${ready.length} can still act.`;
     const c = CLASSES[u.cls];
     if (this.mode) {
@@ -152,24 +166,26 @@ export class BattleController {
     return `${c.name} acted and can still move (🟦 blue), or press Tab for the next hero.`;
   }
 
+  foeSide(side = this.side) { return side === 'player' ? 'enemy' : 'player'; }
+
   renderHint() { const h = $('hint'); if (h) h.innerHTML = this.hintText(); }
 
   disabledReason(u, id) {
     const a = ABIL[id], b = this.b;
-    if (this.busy || b.phase !== 'player') return 'Wait for your turn';
+    if (this.busy || !this.myTurn()) return 'Wait for your turn';
     if (a.free) return u.stanced ? 'Already swapped this turn' : '';
     if (u.acted) return 'Already used this hero\'s action this turn';
     if (u.cd[id] > 0) return `Recharging: ready in ${u.cd[id]} turn${u.cd[id] > 1 ? 's' : ''}`;
-    if (a.consumable && !(b.consumables[a.consumable] > 0)) return 'None left';
+    if (a.consumable && !(b.stock(u.side)[a.consumable] > 0)) return 'None left';
     return '';
   }
 
   renderHud() {
     const b = this.b, u = this.sel;
     $('round').textContent = `Round ${b.round}${b.maxRounds ? ` / ${b.maxRounds}` : ''}`;
-    const mine = this.b.units.filter(o => o.side === 'player');
+    const mine = this.b.units.filter(o => o.side === this.side);
     $('roster').innerHTML = mine.map((o, i) =>
-      `<div class="hero ${o.alive ? '' : 'dead'} ${o === u ? 'sel' : ''} ${this.ready(o) ? 'can' : 'done'}" data-i="${i}"><b>${o.name}</b>${this.ready(o) && b.phase === 'player' ? '<span class="rdy">ready</span>' : ''}
+      `<div class="hero ${o.alive ? '' : 'dead'} ${o === u ? 'sel' : ''} ${this.ready(o) ? 'can' : 'done'}" data-i="${i}"><b>${o.name}</b>${this.ready(o) && this.myTurn() ? '<span class="rdy">ready</span>' : ''}
         <div class="hpbar"><i style="width:${o.hp / o.maxHp * 100}%"></i></div>${o.hp}/${o.maxHp}
         ${o.alive ? `<span class="pips"><i class="${o.moved ? 'spent' : ''}" title="Move">👣</i><i class="${o.acted ? 'spent' : ''}" title="Action">⚔️</i></span>` : '· fallen'}</div>`).join('');
     $('roster').querySelectorAll('.hero').forEach(el => {
@@ -178,8 +194,8 @@ export class BattleController {
     });
     const ui = $('uinfo'), ab = $('abils');
     const anyReady = this.players().some(o => this.ready(o));
-    $('endturn').disabled = this.busy || b.phase !== 'player';
-    $('endturn').classList.toggle('pulse', !anyReady && b.phase === 'player' && !this.busy);
+    $('endturn').disabled = this.busy || !this.myTurn();
+    $('endturn').classList.toggle('pulse', !anyReady && this.myTurn() && !this.busy);
     this.renderHint();
     if (!u || !u.alive) { ui.innerHTML = ''; ab.innerHTML = ''; return; }
     const c = CLASSES[u.cls];
@@ -218,7 +234,8 @@ export class BattleController {
     const tile = TILE[b.g.get(x, y)];
     let html = `<b>${TILE_ICON[b.g.get(x, y)] || ''} ${tile.name}</b>${tile.desc ? `<br><span class="note">${tile.desc}</span>` : ''}`;
     if (b.g.fire[b.g.i(x, y)]) html += `<br><span style="color:#ff8a3a">🔥 On fire (${b.g.fire[b.g.i(x, y)]} rounds): 3 damage</span>`;
-    if (o) html = `<b>${o.side === 'enemy' ? '🟥 ' + esc(this.enemyName) + ' ' : '🟦 '}${o.name}</b> ${o.hp}/${o.maxHp} HP${o.armor ? ` · Armor ${b.armorOf(o)}` : ''}${o.hidden ? ' · Hidden' : ''}${o.behavior && o.side === 'enemy' ? ` · ${o.behavior}` : ''}<br>` + html;
+    const foeLabel = b.pvp ? this.sideName(this.foeSide()) : this.enemyName;
+    if (o) html = `<b>${o.side !== this.side ? '🟥 ' + esc(foeLabel) + ' ' : '🟦 '}${o.name}</b> ${o.hp}/${o.maxHp} HP${o.armor ? ` · Armor ${b.armorOf(o)}` : ''}${o.hidden ? ' · Hidden' : ''}${o.behavior && o.side === 'enemy' ? ` · ${o.behavior}` : ''}<br>` + html;
     let color = 0xffffff, path = null, badge = null;
     if (u && this.mode && !this.busy) {
       const tg = b.targets(u, this.mode).find(q => q.x === x && q.y === y);
@@ -235,13 +252,13 @@ export class BattleController {
         else html = `<b>${a.name}</b> here<br>` + html;
       }
       if (ABIL[this.mode].kind === 'aoe' && (prev?.[0] !== x || prev?.[1] !== y)) this.refresh();
-    } else if (u && !u.moved && !o && !this.busy && this.b.phase === 'player') {
+    } else if (u && !u.moved && !o && !this.busy && this.myTurn()) {
       const reach = b.reach(u), e2 = reach.get(b.g.i(x, y));
       if (e2?.stop && e2.c > 0) {
         html = `👣 Move here: ${e2.c} of ${u.move} steps${b.g.get(x, y) === T.BUSH && u.cls === 'rogue' ? '<br>🌿 The Rogue will be Hidden here' : ''}${b.g.fire[b.g.i(x, y)] ? '<br>⚠️ Fire burns!' : ''}<br>` + html;
         color = 0x8fc8ff; path = pathTo(b.g, reach, b.g.i(x, y));
       }
-    } else if (u && o && o.side === 'enemy' && !this.busy) {
+    } else if (u && o && o.side !== this.side && !this.busy) {
       const basic = b.abilities(u)[0], tg = b.canUse(u, basic) && b.targets(u, basic).find(q => q.unit === o);
       if (tg) { const p = b.preview(u, basic, tg); badge = { x, y, text: `${p.hit}% · ${p.dmg}${p.dmg >= o.hp ? ' 💀' : ''}`, kind: p.dmg >= o.hp ? 'kill' : 'hit' }; html = `Click to ${ABIL[basic].name}: ${p.hit}% · ${p.dmg} dmg<br>` + html; }
       else html += `<br><span class="note">Out of reach: move closer first.</span>`;
@@ -253,7 +270,7 @@ export class BattleController {
   }
 
   click(t) {
-    if (this.busy || this.b.phase !== 'player' || this.b.over || !t) return;
+    if (this.busy || !this.myTurn() || !t) return;
     const b = this.b, [x, y] = t, o = b.unitAt(x, y), u = this.sel;
     if (this.mode) {
       if (b.targets(u, this.mode).some(q => q.x === x && q.y === y)) {
@@ -261,17 +278,17 @@ export class BattleController {
         if (!this.allowed(a.kind === 'attack' ? 'attack' : 'ability', { id, x, y })) return;
         return this.act(() => b.use(u, id, x, y), { kind: a.kind === 'attack' ? 'attack' : 'ability', id });
       }
-      if (o?.side === 'player') return this.select(o);
+      if (o?.side === this.side) return this.select(o);
       return this.cancel();
     }
-    if (o?.side === 'player') return this.select(o);
+    if (o?.side === this.side) return this.select(o);
     if (!u) { if (o) this.flashHint('First click one of your own heroes (blue rings).'); return; }
     const basic = b.abilities(u)[0];
     if (o && b.canUse(u, basic) && b.targets(u, basic).some(q => q.unit === o)) {
       if (!this.allowed('attack', { id: basic, x, y })) return;
       return this.act(() => b.use(u, basic, x, y), { kind: 'attack', id: basic });
     }
-    if (o && o.side === 'enemy') { this.flashHint(u.acted ? `${u.name} has already acted this turn.` : `${o.name} is out of reach. Move closer first (blue tiles).`); return; }
+    if (o && o.side !== this.side) { this.flashHint(u.acted ? `${u.name} has already acted this turn.` : `${o.name} is out of reach. Move closer first (blue tiles).`); return; }
     if (!u.moved) {
       const e = b.reach(u).get(b.g.i(x, y));
       if (e?.stop && e.c > 0) { if (!this.allowed('move', { x, y })) return; return this.act(() => b.move(u, x, y), { kind: 'move', x, y }); }
@@ -287,8 +304,9 @@ export class BattleController {
 
   async act(fn, info = {}) {
     this.busy = true; this.mode = null; this.refresh(); this.tip(null); this.v.showPath?.(null); this.v.showBadge?.(null);
-    const u = this.sel;
+    const u = this.sel, n = this.b.actions.length;
     await fn();
+    this.sendNew(n);
     this.busy = false;
     this.emit(info.kind || 'act', { ...info, unit: u });
     if (u?.hidden) this.emit('hidden', u);
@@ -296,11 +314,50 @@ export class BattleController {
     if (!this.ready(this.sel)) this.selectNext(); else this.refresh();
   }
 
+  /** Pass commands made on this screen to the opponent (online play). */
+  sendNew(from) { if (this.onCommand) for (let i = from; i < this.b.actions.length; i++) this.onCommand(this.b.actions[i], i); }
+
+  /** Apply a command received from the remote opponent (queued, so they animate in order). */
+  applyRemote(cmd) {
+    return this.remoteQ = this.remoteQ.then(async () => {
+      if (this.b.over || this.myTurn()) return false;
+      this.busy = true; this.sel = null; this.mode = null; this.refresh();
+      const u = this.b.units[cmd.u];
+      if (u && cmd.t !== 'e') await this.v.focusUnit?.(u);
+      const ok = await this.b.applyCmd(cmd);
+      this.busy = false;
+      if (this.b.over) { this.emit('over', this.b.result); this.refresh(); this.onFinish(); return ok; }
+      if (cmd.t === 'e' && ok) await this.beginLocalTurn(); else this.refresh();
+      return ok;
+    });
+  }
+
+  async beginLocalTurn() {
+    await this.v.restoreCamera?.();
+    if (this.myTurn()) {
+      await this.onTurn?.(this.b.phase);
+      this.v.banner(this.b.pvp ? `${this.sideName(this.b.phase)}: your turn` : `Round ${this.b.round}`);
+      this.emit('playerTurn', this.b.round);
+    }
+    this.sel = null; this.selectNext();
+  }
+
   async endTurn() {
-    if (this.busy || this.b.phase !== 'player') return;
+    if (this.busy || !this.myTurn()) return;
     if (!this.allowed('endTurn')) return;
     this.busy = true; this.mode = null; this.refresh();
     this.emit('endTurn');
+    if (this.b.pvp) {
+      const n = this.b.actions.length;
+      await this.b.endTurn();
+      this.sendNew(n);
+      this.busy = false;
+      if (this.b.over) { this.emit('over', this.b.result); this.refresh(); return this.onFinish(); }
+      if (this.myTurn()) return this.beginLocalTurn();
+      this.v.banner(`${this.sideName(this.b.phase)}'s turn`);
+      this.sel = null; this.refresh();
+      return;
+    }
     const logLen = this.b.log.length;
     const poll = setInterval(() => { const l = this.b.log[this.b.log.length - 1]; if (this.b.log.length > logLen && l) { this.enemyLine = `🟥 Enemy turn: ${esc(l)}`; this.renderHint(); } }, 150);
     this.renderHint();

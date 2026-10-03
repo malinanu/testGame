@@ -229,7 +229,7 @@ export class View {
 
   /** Enemy turn: ease the camera toward whoever is acting, then back. */
   async focusUnit(u) {
-    if (u.side !== 'enemy' || this.noFollow) return;
+    if (u.side === (this.mySide || 'player') || this.noFollow) return;
     const uv = this.uv(u); if (!uv) return;
     this.camHome ??= this.cam.target.clone();
     const from = this.cam.target.clone(), to = this.camHome.clone().lerp(uv.actor.root.position.clone().setY(0), 0.6);
@@ -264,13 +264,17 @@ export class View {
   }
 
   // ------------------------------------------------------------ units
+  /** "Mine" = the side viewing this screen (blue); in hot-seat this flips each turn. */
+  isMine(u) { return u.side === (this.mySide || 'player'); }
+  ringColor(u) { return this.isMine(u) ? 0x4ab0ff : 0xff4f4f; }
+
   addUnit(u) {
     const actor = new Actor(this.assets, CLASSES[u.cls].model, { tint: u.tint ? new THREE.Color(u.tint) : null, scale: 0.92 });
     const ring = new THREE.Mesh(new THREE.RingGeometry(0.6, 0.78, 32).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({ color: u.side === 'player' ? 0x4ab0ff : 0xff4f4f, transparent: true, opacity: 0.9, depthWrite: false }));
+      new THREE.MeshBasicMaterial({ color: this.ringColor(u), transparent: true, opacity: 0.9, depthWrite: false }));
     ring.position.y = 0.05;
     const label = document.createElement('div');
-    label.className = 'ulabel ' + u.side;
+    label.className = 'ulabel ' + (this.isMine(u) ? 'player' : 'enemy');
     label.innerHTML = `<div class="rdy">▼</div><div class="st"></div><div class="bar"><i></i></div>`;
     this.labels.appendChild(label);
     const uv = { u, actor, ring, label, held: {} };
@@ -317,7 +321,8 @@ export class View {
     if (u.elite) st.push('<b class="elite">ELITE</b>');
     if (u.tierColor) st.push(`<b style="color:${u.tierColor}">◆</b>`);
     uv.label.querySelector('.st').innerHTML = st.join('');
-    uv.label.classList.toggle('done', u.side === 'player' && u.moved && u.acted);
+    uv.label.classList.toggle('done', this.isMine(u) && u.moved && u.acted);
+    uv.label.classList.toggle('player', this.isMine(u)); uv.label.classList.toggle('enemy', !this.isMine(u));
     uv.label.classList.toggle('sel', selected);
     uv.ring.material.opacity = u.alive ? 0.9 : 0;
     uv.actor.model.traverse(m => { if (m.isMesh) { m.material.transparent = u.hidden; m.material.opacity = u.hidden ? 0.55 : 1; } });
@@ -326,7 +331,7 @@ export class View {
   setSelected(u) {
     for (const uv of this.units.values()) {
       const sel = uv.u === u;
-      uv.ring.material.color.set(sel ? 0xffd54a : uv.u.side === 'player' ? 0x4ab0ff : 0xff4f4f);
+      uv.ring.material.color.set(sel ? 0xffd54a : this.ringColor(uv.u));
       this.updateLabel(uv.u, sel);
     }
   }
@@ -592,9 +597,13 @@ export class View {
     Object.assign(this.cam, { target: new THREE.Vector3(0, 0, 0), dist: 34, pitch: 0.75, orbit: 0.06 });
   }
 
-  battleCamera() {
-    // aim a little toward the player side so their own heroes are not hidden behind the bottom HUD panel
-    Object.assign(this.cam, { target: new THREE.Vector3(0, 0, -5.5), dist: 30, pitch: 0.98, orbit: 0, yaw: 0, yawGoal: 0 });
+  battleCamera(side = 'player', smooth = false) {
+    // aim a little toward the viewer's own side so their heroes are not hidden behind the bottom HUD panel;
+    // the 'enemy' side (player 2 in versus play) looks at the board from the opposite end
+    const flip = side === 'enemy', yaw = flip ? Math.PI : 0;
+    this.camHome = null;
+    Object.assign(this.cam, { target: new THREE.Vector3(0, 0, flip ? 5.5 : -5.5), dist: 30, pitch: 0.98, orbit: 0, yawGoal: yaw });
+    if (!smooth) this.cam.yaw = yaw;
   }
 
   // ------------------------------------------------------------ input & loop

@@ -441,16 +441,20 @@ var Battle = class {
   /**
    * consumables: shared player-side stock, e.g. { potion: 2 } (enables the Potion Flask ability).
    * maxRounds: when set, surviving past that round ends the battle as a loss for the player (raid timeout).
+   * pvp: both sides are commanded by people (hot-seat / online). Commands of both sides are recorded,
+   *   endTurn() hands control to the other side instead of running the AI, and consumables are per side:
+   *   { player: { potion: 1 }, enemy: { potion: 1 } }.
    */
   constructor({ grid, units, view = NullView, seed = 1, onEnd = () => {
-  }, consumables = {}, maxRounds = 0 }) {
+  }, consumables = {}, maxRounds = 0, pvp = false }) {
     this.g = grid;
     this.units = units;
     this.view = view;
     this.rand = rng(seed);
     this.onEnd = onEnd;
-    this.consumables = { ...consumables };
+    this.pvp = pvp;
     this.maxRounds = maxRounds;
+    this.consumables = pvp ? { player: { ...consumables.player }, enemy: { ...consumables.enemy } } : { ...consumables };
     this.round = 1;
     this.phase = "player";
     this.over = false;
@@ -460,24 +464,36 @@ var Battle = class {
     for (const u of units) if (u.behavior === "guard" && !u.post) u.post = [u.x, u.y];
     this.startPhase("player");
   }
-  record(entry) {
-    if (this.phase === "player") this.actions.push(entry);
+  get recording() {
+    return this.pvp ? this.phase === "player" || this.phase === "enemy" : this.phase === "player";
   }
-  /** Re-run a recorded command log headless. Returns false if any command is illegal. */
+  record(entry) {
+    if (this.recording) this.actions.push(entry);
+  }
+  /** Re-run a recorded command log. Returns false if any command is illegal. */
   async replay(actions) {
     for (const a of actions) {
       if (this.over) break;
-      if (a.t === "e") {
-        if (this.phase !== "player") return false;
-        await this.endPlayerTurn();
-        continue;
-      }
-      const u = this.units[a.u];
-      if (!u || u.side !== "player" || this.phase !== "player") return false;
-      const ok = a.t === "m" ? await this.move(u, a.x, a.y) : a.t === "a" ? await this.use(u, a.id, a.x, a.y) : false;
-      if (!ok) return false;
+      if (!await this.applyCmd(a)) return false;
     }
     return true;
+  }
+  /** Apply one recorded command (also used for commands arriving from an online opponent). */
+  async applyCmd(a) {
+    if (this.over || !a) return false;
+    const human = this.pvp ? this.phase : "player";
+    if (this.phase !== human) return false;
+    if (a.t === "e") {
+      await this.endTurn();
+      return true;
+    }
+    const u = this.units[a.u];
+    if (!u || u.side !== human) return false;
+    return a.t === "m" ? this.move(u, a.x, a.y) : a.t === "a" ? this.use(u, a.id, a.x, a.y) : false;
+  }
+  /** Consumable stock of one side. */
+  stock(side) {
+    return this.pvp ? this.consumables[side] : side === "player" ? this.consumables : {};
   }
   say(msg) {
     this.log.push(msg);
@@ -494,7 +510,7 @@ var Battle = class {
   }
   abilities(u) {
     const list = CLASSES[u.cls].abilities;
-    return u.side === "player" && this.consumables.potion > 0 ? [...list, "flask"] : list;
+    return this.stock(u.side).potion > 0 ? [...list, "flask"] : list;
   }
   moveBudget(u) {
     return u.move;
@@ -506,7 +522,7 @@ var Battle = class {
     const a = ABIL[id];
     if (!u.alive || this.over) return false;
     if (a.free) return !u.stanced;
-    if (a.consumable && !(this.consumables[a.consumable] > 0)) return false;
+    if (a.consumable && !(this.stock(u.side)[a.consumable] > 0)) return false;
     return !u.acted && !(u.cd[id] > 0);
   }
   /** Valid targets for an ability from (fx, fy). Each target: {x, y, unit?, tree?} */
@@ -604,13 +620,13 @@ var Battle = class {
   }
   // ---------------------------------------------------------------- actions
   async move(u, x, y) {
-    const rec = this.phase === "player";
+    const rec = this.recording;
     const ok = await this.doMove(u, x, y);
     if (ok && rec) this.actions.push({ t: "m", u: this.units.indexOf(u), x, y });
     return ok;
   }
   async use(u, id, tx, ty) {
-    const rec = this.phase === "player";
+    const rec = this.recording;
     const ok = await this.doUse(u, id, tx, ty);
     if (ok && rec) this.actions.push({ t: "a", u: this.units.indexOf(u), id, x: tx, y: ty });
     return ok;
@@ -655,7 +671,7 @@ var Battle = class {
     }
     u.acted = true;
     if (a.cd) u.cd[id] = a.cd;
-    if (a.consumable) this.consumables[a.consumable]--;
+    if (a.consumable) this.stock(u.side)[a.consumable]--;
     const wasHidden = u.hidden;
     if (a.kind === "attack") {
       u.attacked = true;
@@ -803,6 +819,27 @@ var Battle = class {
       }
       if (u.alive && u.cls === "rogue" && g.get(u.x, u.y) === T.BUSH && !u.attacked) await this.hide(u);
     }
+  }
+  /** End the current human turn: AI battles resolve the enemy phase, pvp battles pass to the other side. */
+  async endTurn() {
+    if (!this.pvp) return this.endPlayerTurn();
+    const side = this.phase;
+    if (side !== "player" && side !== "enemy" || this.over) return;
+    this.record({ t: "e" });
+    await this.endOfTurn(side);
+    if (this.over) return;
+    if (side === "player") {
+      this.startPhase("enemy");
+      return;
+    }
+    let changed = false;
+    for (let i = 0; i < this.g.fire.length; i++) if (this.g.fire[i]) {
+      this.g.fire[i]--;
+      changed = true;
+    }
+    if (changed) await this.view.fire();
+    this.round++;
+    this.startPhase("player");
   }
   /** Called when the player presses End Turn: resolves the enemy phase and returns control. */
   async endPlayerTurn() {

@@ -139,6 +139,7 @@ class Game {
     const done = new Set(), free = x => { if (x && !keep.has(x) && !done.has(x)) { done.add(x); x.dispose(); } };
     for (const r of roots) r.traverse(o => {
       if (o.isInstancedMesh) o.dispose();
+      o.skeleton?.dispose(); // each actor's skeleton owns a bone texture
       free(o.geometry);
       for (const m of [].concat(o.material || [])) { if (keep.has(m)) continue; for (const v of Object.values(m)) if (v?.isTexture) free(v); free(m); }
     });
@@ -425,7 +426,7 @@ class Game {
     if (this.mode === 'build') {
       const [x, y] = this.anchor(p.tile, this.buildType), r = c.build(this.buildType, x, y);
       if (r.error) { this.ui.notify(r.error, 'warn'); this.sfx.tone?.(180, 0.15, { gain: 0.15 }); return; }
-      this.sfx.thud();
+      this.sfx.thud(); this.hoverKey = null; // the tile under the cursor is taken now: re-check the ghost
       this.fx.burst(new THREE.Vector3(...this.worldOf(r, 0.3)), { tex: 'smoke_01_a', color: 0xd8c8a8, count: 10, speed: 2.5, life: 1, size: 1.4, additive: false, gravity: 0.5 });
       if (BUILDINGS[this.buildType].unique) this.setMode('select');
       return;
@@ -508,6 +509,7 @@ class Game {
         case 'victory': this.victory(); break;
       }
       if (e.type === 'built' || e.type === 'upgraded') { this.ui.mmDirty = true; this.buildDirty = true; }
+      if (e.type === 'built' || e.type === 'removed' || e.type === 'road' || e.type === 'territory' || e.type === 'fog' || e.type === 'tree') this.hoverKey = null;
     }
   }
   victory() {
@@ -642,12 +644,12 @@ class Game {
     this.drain();
     const t = this.clock.elapsedTime;
     this.world.update(raw, t);
-    this.units.update(raw);
     this.adv.update(raw * (this.speed ? 1 : 0), this.cam.keys, this.cam.moveYaw, this.heroMode);
     this.fx.update(raw);
     this.smoke(raw * (this.speed ? 1 : 0));
     this.confetti(raw * (this.speed ? 1 : 0));
-    this.cam.update(raw, !!document.querySelector('.screen.active'));
+    this.cam.update(raw, !!modal);
+    this.camera.updateMatrixWorld(); this.units.update(raw); // after the camera moved: its frustum culling is for this frame
     this.dayNight(raw);
     this.world.lod(this.cam.target, this.cam.zoom, this.quality, this.camera.position);
     this.viewRange();

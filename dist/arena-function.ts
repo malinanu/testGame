@@ -1598,19 +1598,24 @@ function createSupabaseStore(sb, { clock = () => Date.now() } = {}) {
     async putRaid(r) {
       must(await sb.from(R).upsert({ id: r.id, attacker: r.attacker, defender: r.defender, status: r.status, created_at: r.createdAt, finished_at: r.finishedAt ?? null, data: r }));
     },
-    /** Atomically move a raid from open to settling: only one request can settle it. */
+    /**
+     * Atomically take an open raid for settling: only one request can. The status column only allows
+     * 'open' / 'done' (see the migration), so the claim flips the column to 'done' right away; the full
+     * row (data, finished_at) is written when settling completes, or the claim is released on failure.
+     */
     async claimRaid(id) {
-      return (must(await sb.from(R).update({ status: "settling" }).eq("id", id).eq("status", "open").select("id")) || []).length === 1;
+      return (must(await sb.from(R).update({ status: "done" }).eq("id", id).eq("status", "open").select("id")) || []).length === 1;
     },
     async releaseRaid(id) {
-      must(await sb.from(R).update({ status: "open" }).eq("id", id).eq("status", "settling"));
+      must(await sb.from(R).update({ status: "open" }).eq("id", id).is("finished_at", null));
     },
     async openRaidOf(attacker) {
       return rows(await sb.from(R).select("data").eq("attacker", attacker).eq("status", "open").limit(1))[0] ?? null;
     },
     async raidsAgainst(defender, limit) {
-      return rows(await sb.from(R).select("data").eq("defender", defender).eq("status", "done").order("finished_at", { ascending: false }).limit(limit));
+      return rows(await sb.from(R).select("data").eq("defender", defender).eq("status", "done").order("finished_at", { ascending: false }).limit(limit)).filter((r) => r.status === "done");
     },
+    // not mid-settlement
     async recentTargets(attacker, since) {
       return (must(await sb.from(R).select("defender").eq("attacker", attacker).gte("created_at", since)) || []).map((r) => r.defender);
     },

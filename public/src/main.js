@@ -10,7 +10,9 @@ addEventListener('keydown', e => {
   const d = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: cols, ArrowUp: -cols }[e.key];
   if (!d) return;
   e.preventDefault();
-  items[i < 0 ? (d > 0 ? 0 : n - 1) : (i + d + n * cols) % n].focus();
+  // left/right wrap around; up/down move a row and stop at the edges
+  const j = i < 0 ? (d > 0 ? 0 : n - 1) : Math.abs(d) === 1 ? (i + d + n) % n : i + d >= 0 && i + d < n ? i + d : i;
+  items[j].focus();
 });
 tiles.querySelector('.tile')?.focus({ preventScroll: true });
 

@@ -339,10 +339,12 @@ export class ChessScene {
 
   /** Rebuild every piece instantly from a position (new game, undo). captured = {w:[piece ints], b:[...]} */
   setPosition(chess, captured = { [WHITE]: [], [BLACK]: [] }) {
-    // a new game / undo can arrive mid-animation: end that animation (bump the generation, finish its
-    // tweens), and remove the pieces it held and anything it left lying around (a fallen crown)
+    // a new game / undo can arrive mid-animation: drop its tweens without resolving them, so the old
+    // capture/cheer/game-over choreography (all built on tween/wait) simply never continues; then remove
+    // the pieces it held and anything it left lying around (a fallen crown), and undo its camera/light changes
     this.gen++;
-    for (const tw of this.tweens.splice(0)) tw.res();
+    this.tweens.length = 0;
+    this.cam.focus = null; this.boardGlow.intensity = 25; this.boardGlow.color.set(0x9fb7ff);
     const old = [...this.pieces.values(), ...this.moving, ...this.grave[WHITE], ...this.grave[BLACK]];
     this.moving.clear();
     for (const o of this.loose.splice(0)) o.removeFromParent();
@@ -619,24 +621,25 @@ export class ChessScene {
     canvas.addEventListener('contextmenu', e => e.preventDefault());
     // touch: one finger orbits after it moves (a still tap picks a square), two fingers pinch-zoom
     const touches = new Map();
-    let pinch = 0, last = null;
+    let pinch = 0; const last = new Map(); // previous position per pointer (movementX is unreliable for touch)
     canvas.addEventListener('pointerdown', e => {
       if (e.pointerType === 'touch') { touches.set(e.pointerId, { x: e.clientX, y: e.clientY }); pinch = 0; if (touches.size > 1 && drag) drag.moved = 99; }
       if (touches.size <= 1) drag = { b: e.button, moved: 0 };
-      last = { x: e.clientX, y: e.clientY };
+      last.set(e.pointerId, { x: e.clientX, y: e.clientY });
     });
-    const lift = e => { touches.delete(e.pointerId); pinch = 0; };
+    const lift = e => { touches.delete(e.pointerId); last.delete(e.pointerId); pinch = 0; };
     addEventListener('pointercancel', e => { lift(e); drag = null; });
     addEventListener('pointerup', e => { lift(e); if (drag && drag.moved < 6 && e.target === canvas && drag.b === 0) this.onSquare?.(pick(e)); if (!touches.size) drag = null; });
     canvas.addEventListener('pointermove', e => {
+      const t = touches.get(e.pointerId); if (t) { t.x = e.clientX; t.y = e.clientY; } // every move, so a pinch starts from real positions
       if (e.pointerType === 'touch' && touches.size > 1) {
-        const t = touches.get(e.pointerId); if (t) { t.x = e.clientX; t.y = e.clientY; }
+        last.set(e.pointerId, { x: e.clientX, y: e.clientY });
         const [a, b] = [...touches.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
         if (pinch) this.cam.dist = THREE.MathUtils.clamp(this.cam.dist - (d - pinch) * 0.06, 12, 55);
         pinch = d; return;
       }
-      // movementX is unreliable for touch: measure from the previous position
-      const mx = last ? e.clientX - last.x : 0, my = last ? e.clientY - last.y : 0; last = { x: e.clientX, y: e.clientY };
+      const lp = last.get(e.pointerId), mx = lp ? e.clientX - lp.x : 0, my = lp ? e.clientY - lp.y : 0;
+      last.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (drag) {
         drag.moved += Math.abs(mx) + Math.abs(my);
         if (drag.b === 2 || (drag.b === 0 && drag.moved > 6)) {

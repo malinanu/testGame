@@ -23,6 +23,9 @@ const MOODS = {
   night: { bg: 0x152238, fog: [12, 45], hemi: 0.25, sun: 0.25, sunColor: 0x8fa8ff },
 };
 
+/** Free a mesh tree this view created itself (not asset clones, whose geometry is shared). */
+const disposeOwn = o => o.traverse(m => { if (m.isMesh) { m.geometry.dispose(); m.material.dispose(); } });
+
 export class View {
   constructor(canvas, assets) {
     this.assets = assets;
@@ -112,6 +115,7 @@ export class View {
   buildBoard(grid) {
     this.grid = grid;
     if (this.tiles) { this.tiles.geometry.dispose(); this.tiles.material.dispose(); this.tiles.dispose(); } // one per battle
+    for (const f of this.fires.values()) disposeOwn(f);
     this.board.clear();
     this.burnt = new Set(); this.fires = new Map();
     this.props = new Array(W * H).fill(null);
@@ -250,7 +254,7 @@ export class View {
   // ------------------------------------------------------------ fire
   syncFire() {
     const g = this.grid;
-    for (const [i, f] of this.fires) if (!g.fire[i]) { this.board.remove(f); this.fires.delete(i); }
+    for (const [i, f] of this.fires) if (!g.fire[i]) { this.board.remove(f); disposeOwn(f); this.fires.delete(i); }
     for (let i = 0; i < g.fire.length; i++) {
       if (!g.fire[i] || this.fires.has(i)) continue;
       const f = new THREE.Group(); tw(i % W, (i / W) | 0, f.position);
@@ -312,7 +316,7 @@ export class View {
     for (const uv of this.units.values()) {
       this.scene.remove(uv.actor.root); uv.label.remove();
       // the actor's materials are its own clones and the rings are per unit; meshes and props are shared assets
-      for (const m of uv.actor.meshes) m.material.dispose();
+      for (const m of uv.actor.meshes) { m.material.dispose(); m.skeleton?.dispose(); } // the skeleton owns a bone texture
       for (const o of [uv.ring, uv.aura]) if (o) { o.geometry.dispose(); o.material.dispose(); }
     }
     this.units.clear();
@@ -336,7 +340,7 @@ export class View {
     uv.label.classList.toggle('player', this.isMine(u)); uv.label.classList.toggle('enemy', !this.isMine(u));
     uv.label.classList.toggle('sel', selected);
     uv.ring.material.opacity = u.alive ? 0.9 : 0;
-    uv.actor.model.traverse(m => { if (m.isMesh) { m.material.transparent = u.hidden; m.material.opacity = u.hidden ? 0.55 : 1; } });
+    for (const m of uv.actor.meshes) { m.material.transparent = u.hidden; m.material.opacity = u.hidden ? 0.55 : 1; } // held props share one material per atlas: leave them
   }
 
   setSelected(u) {
@@ -465,13 +469,14 @@ export class View {
       if (kind === 'potion') o.rotation.z = k * 8; else o.lookAt(at(Math.min(1, k + 0.05)));
     });
     this.scene.remove(o);
+    if (kind !== 'arrow' && kind !== 'bolt') disposeOwn(o); // arrows are clones of shared asset meshes
   }
 
   ring(pos, color) {
     const m = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.8, 32).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8, depthWrite: false, side: THREE.DoubleSide }));
     m.position.copy(pos).setY(0.1); this.scene.add(m);
-    this.tween(0.4, k => { m.scale.setScalar(1 + k * 3); m.material.opacity = 0.8 * (1 - k); }).then(() => this.scene.remove(m));
+    this.tween(0.4, k => { m.scale.setScalar(1 + k * 3); m.material.opacity = 0.8 * (1 - k); }).then(() => { this.scene.remove(m); disposeOwn(m); });
   }
 
   async explode(x, y, color) {
@@ -479,7 +484,7 @@ export class View {
       new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false }));
     tw(x, y, m.position).setY(0.6); this.scene.add(m);
     await this.tween(0.38, k => { m.scale.setScalar(0.3 + k * S * 1.5); m.material.opacity = 0.7 * (1 - k); });
-    this.scene.remove(m);
+    this.scene.remove(m); disposeOwn(m);
   }
 
   async hit(u, n, opts = {}) {

@@ -57,7 +57,7 @@ export class BattleController {
   allowed(kind, data) { if (!this.guard) return true; const ok = this.guard(kind, data); if (!ok) this.emit('blocked', { kind, data }); return ok; }
 
   dispose() {
-    this.b.aborted = true; // stops an AI turn still running behind the next screen
+    this.b.aborted = true; this.disposed = true; // stops an AI turn / animation still running behind the next screen
     removeEventListener('keydown', this.onKey);
     this.v.onClick = this.v.onHover = this.v.onCancel = null;
     $('tip').style.display = 'none';
@@ -307,6 +307,7 @@ export class BattleController {
     this.busy = true; this.mode = null; this.refresh(); this.tip(null); this.v.showPath?.(null); this.v.showBadge?.(null);
     const u = this.sel, n = this.b.actions.length;
     await fn();
+    if (this.disposed) return; // left the battle mid-animation: this HUD belongs to the next one now
     this.sendNew(n);
     this.busy = false;
     this.emit(info.kind || 'act', { ...info, unit: u });
@@ -330,6 +331,7 @@ export class BattleController {
         if (u && cmd.t !== 'e') await this.v.focusUnit?.(u);
         ok = await this.b.applyCmd(cmd);
       } catch (e) { console.warn('remote command failed', e); ok = false; }
+      if (this.disposed) return ok;
       this.busy = false;
       if (this.b.over) { this.emit('over', this.b.result); this.refresh(); this.onFinish(); return ok; }
       if (cmd.t === 'e' && ok) await this.beginLocalTurn(); else this.refresh();
@@ -339,10 +341,12 @@ export class BattleController {
 
   async beginLocalTurn() {
     await this.v.restoreCamera?.();
+    if (this.disposed) return;
     if (this.myTurn()) {
       // hot-seat: keys and clicks behind the pass-the-device curtain must not act for the next player
       this.busy = true;
       try { await this.onTurn?.(this.b.phase); } finally { this.busy = false; }
+      if (this.disposed) return;
       this.v.banner(this.b.pvp ? `${this.sideName(this.b.phase)}: your turn` : `Round ${this.b.round}`);
       this.emit('playerTurn', this.b.round);
     }
@@ -357,6 +361,7 @@ export class BattleController {
     if (this.b.pvp) {
       const n = this.b.actions.length;
       await this.b.endTurn();
+      if (this.disposed) return;
       this.sendNew(n);
       this.busy = false;
       if (this.b.over) { this.emit('over', this.b.result); this.refresh(); return this.onFinish(); }
@@ -370,6 +375,7 @@ export class BattleController {
     this.renderHint();
     await this.b.endPlayerTurn();
     clearInterval(poll); this.enemyLine = null;
+    if (this.disposed) return;
     this.busy = false;
     if (this.b.over) { this.emit('over', this.b.result); return this.onFinish(); }
     this.emit('playerTurn', this.b.round);

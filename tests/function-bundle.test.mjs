@@ -14,6 +14,7 @@ function fakeSupabase() {
     constructor(t) { this.t = t; this.f = []; this.opts = {}; }
     select(cols, opts = {}) { this.cols = cols; this.opts = opts; return this; }
     eq(k, v) { this.f.push(r => r[k] === v); return this; }
+    is(k, v) { this.f.push(r => (r[k] ?? null) === v); return this; }
     gt(k, v) { this.f.push(r => r[k] > v); return this; }
     gte(k, v) { this.f.push(r => r[k] >= v); return this; }
     lt(k, v) { this.f.push(r => r[k] < v); return this; }
@@ -22,11 +23,14 @@ function fakeSupabase() {
     range(a, b) { this.rng = [a, b]; return this; }
     maybeSingle() { this.single = true; return this; }
     upsert(row) { this.row = row; return this; }
+    update(patch) { this.patch = patch; return this; }
     then(res, rej) { try { res(this.exec()); } catch (e) { rej(e); } }
     exec() {
       const T = (tables[this.t] ||= new Map());
-      if (this.row) { T.set(this.row[PK[this.t]], structuredClone(this.row)); return { data: null, error: null }; }
+      const bad = r => this.t === 'arena_raids' && r.status !== undefined && !['open', 'done'].includes(r.status);
+      if (this.row) { if (bad(this.row)) return { data: null, error: { message: 'violates check constraint arena_raids_status_check' } }; T.set(this.row[PK[this.t]], structuredClone(this.row)); return { data: null, error: null }; }
       let rows = [...T.values()].filter(r => this.f.every(f => f(r)));
+      if (this.patch) { if (bad(this.patch)) return { data: null, error: { message: 'violates check constraint arena_raids_status_check' } }; for (const r of rows) Object.assign(r, structuredClone(this.patch)); if (!this.cols) return { data: null, error: null }; }
       if (this.opts.head) return { data: null, count: rows.length, error: null };
       if (this.o) { const [k, asc] = this.o; rows.sort((a, b) => (a[k] > b[k] ? 1 : a[k] < b[k] ? -1 : 0) * (asc ? 1 : -1)); }
       if (this.rng) rows = rows.slice(this.rng[0], this.rng[1] + 1);

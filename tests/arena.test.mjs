@@ -103,7 +103,13 @@ console.log('ok forged logs rejected');
   assert.equal(won.length, 1, 'exactly one of two parallel finishes settles');
   assert.match(both.find(r => r.error).error, /settled/);
   assert.equal((await store.getProfile('u1')).gold, g0 + won[0].rewards.gold, 'rewards paid once');
-  console.log('ok foreign/unknown abilities rejected, repeated start reuses the raid, parallel finish settles once');
+  t += 6 * 3.6e6;
+  const h0 = (await store.getProfile('u1')).herbs;
+  const hv = await Promise.all([call('u1', 'harvest'), call('u1', 'harvest')]);
+  const good = hv.filter(r => !r.error);
+  assert.equal(good.length, 1, 'one of two parallel harvests pays');
+  assert.equal((await store.getProfile('u1')).herbs, h0 + good[0].harvested.herbs);
+  console.log('ok foreign/unknown abilities rejected, repeated start reuses the raid, parallel finish settles once, parallel harvest pays once');
 }
 
 // player vs player: u2 raids u1 and u1's rating moves too

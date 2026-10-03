@@ -113,14 +113,15 @@ export class Bot {
     if (worst) this.place('watchtower', worst.b.cx, worst.b.cy);
   }
 
-  run(minutes, plan) {
-    for (let t = 0; t < minutes * 60; t += 5) { plan(this, t); this.c.step(5); }
+  /** step(dt) advances the world; the browser tests pass one that also runs the 3D view each tick. */
+  run(minutes, plan, step = dt => this.c.step(dt)) {
+    for (let t = 0; t < minutes * 60; t += 5) { plan(this, t); step(5); }
   }
 }
 
 /** The canonical build order: a demand-driven planner. Returns the colony and milestones (minutes). */
-export function playthrough(seed = 3, { minutes = 240, log = () => {} } = {}) {
-  const c = new Colony({ seed }), bot = new Bot(c, log), ms = {};
+export function playthrough(seed = 3, { minutes = 240, log = () => {}, colony = null, step } = {}) {
+  const c = colony || new Colony({ seed }), bot = new Bot(c, log), ms = {};
   const mark = k => { if (!(k in ms)) ms[k] = +(c.time / 60).toFixed(1); };
   const want = (type, n, score) => { n = Math.ceil(n); while (c.count(type) < n) { if (!bot.place(type, undefined, undefined, score)) return false; } return true; };
   const trees = (x, y) => bot.treesNear(x, y);
@@ -190,6 +191,6 @@ export function playthrough(seed = 3, { minutes = 240, log = () => {} } = {}) {
     if (!c.count('sanctum') && c.relics.length >= 5 && c.pop.total >= 250) { if (b.place('sanctum')) mark('sanctum'); }
     if (P.total >= 100) mark('pop100');
     if (P.total >= 200) mark('pop200');
-  });
+  }, step);
   return { c, ms };
 }

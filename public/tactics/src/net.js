@@ -203,10 +203,12 @@ export class OnlineMatch {
         this.join(older.code, { timeout: 5000 })
           .then(s => { this.leaveLobby(); resolve(s); })
           .catch(async () => {
-            this.switching = false; this.rejected = false;
+            this.rejected = false;
             if (this.closed) return;
+            // still switching until we host again: a lobby update meanwhile must not start another join
             try { await this.host(code); await lobby.track({ id: this.id, name: this.name, code, since, state: 'waiting' }); }
             catch (e) { if (!this.closed) this.onStatus(`⚠️ ${esc(e.message)} Press Cancel and try again.`); }
+            finally { this.switching = false; }
           });
       };
       this.checkLobby(waiting);
@@ -238,9 +240,16 @@ export class OnlineMatch {
     }, 1500);
   }
   /** Tell the opponent they lost by forfeit (they were away for too long). */
-  claim(reason) { this.send({ t: 'claim', reason }); }
+  claim(reason) { this.claimed = { reason, seed: this.setup?.seed }; this.send({ t: 'claim', reason }); }
+  /** A forfeit claim is a broadcast the absent player missed: repeat it whenever they show up again. */
+  reclaim() {
+    const c = this.claimed;
+    if (!c || c.seed !== this.setup?.seed || Date.now() - (this.claimSent || 0) < 1000) return;
+    this.claimSent = Date.now(); this.send({ t: 'claim', reason: c.reason });
+  }
 
   started(setup) {
+    this.claimed = null;
     this.setup = setup; this.expect = 0; this.buffer.clear(); this.wantRematch = this.peerRematch = false; this.present = true;
     this.resolveQuick?.(setup); this.resolveQuick = null;
     if (this.lobby) this.leaveLobby();
@@ -267,7 +276,7 @@ export class OnlineMatch {
   presence(list) {
     if (!this.peer) return;
     const here = list.some(p => p.id === this.peer.id);
-    if (here !== this.present) { this.present = here; this.onOpponent(here); if (here && this.linked) this.send({ t: 'ping', n: this.linked.logLength() }); }
+    if (here !== this.present) { this.present = here; this.onOpponent(here); if (here && this.linked) this.send({ t: 'ping', n: this.linked.logLength() }); if (here) this.reclaim(); }
   }
 
   accept(seq, cmd) {
@@ -290,6 +299,7 @@ export class OnlineMatch {
   handle(m) {
     if (this.closed || !m || m.from === this.id) return;
     if (m.to && m.to !== this.id) return;
+    if (this.claimed && m.from === this.peer?.id && m.t !== 'claim') this.reclaim(); // they are back: tell them again
     switch (m.t) {
       case 'hello':
         if (this.role !== 'host') return;

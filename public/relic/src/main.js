@@ -442,12 +442,12 @@ const assets = await loadGame((d, n) => { $('loadbar').style.width = `${Math.rou
 const game = new Game(assets);
 window.game = game; // for debugging and automated tests
 
-let founder = 'Knight';
+let founder = 'Knight', difficulty = store.get('wwc-diff') || 'normal';
 function titleScreen() {
   game.running = false; $('hud').classList.add('hidden');
   const saved = store.get(SAVE_KEY);
   let info = '';
-  if (saved) { try { const d = JSON.parse(saved); info = `Saved colony: day ${Math.floor(d.time / 240) + 1}, ${d.buildings.length} buildings, ${d.relics.length}/5 relics.`; } catch { info = ''; } }
+  if (saved) { try { const d = JSON.parse(saved); info = `Saved colony: day ${Math.floor(d.time / 240) + 1}, ${d.buildings.length} buildings, ${d.relics.length}/5 relics (${({ easy: 'Relaxed', normal: 'Settler', hard: 'Pioneer' })[d.difficulty || 'normal']}).`; } catch { info = ''; } }
   $('b-continue').classList.toggle('hidden', !saved); $('savedinfo').textContent = info;
   show('title');
 }
@@ -455,12 +455,13 @@ function newScreen() {
   $('founders').innerHTML = Object.entries(HEROES).map(([k, h]) => `<button class="founder ${k === founder ? 'sel' : ''}" data-k="${k}"><div class="pt" style="background-image:url(../assets/ui/hero-${k.toLowerCase()}.webp)"></div><b>${k}</b><small>${h.blurb}<br>❤ ${h.hp} · ${h.ranged ? 'Ranged' : 'Melee'}</small></button>`).join('');
   $('founders').querySelectorAll('.founder').forEach(b => { b.onclick = () => { founder = b.dataset.k; newScreen(); }; b.ondblclick = () => $('b-start').click(); });
   if (!$('seed').value) $('seed').value = 1 + Math.floor(Math.random() * 99999);
+  document.querySelectorAll('#diffs button').forEach(b => { b.classList.toggle('on', b.dataset.d === difficulty); b.onclick = () => { difficulty = b.dataset.d; store.set('wwc-diff', difficulty); newScreen(); }; });
   show('new');
 }
 $('b-new').onclick = () => { if (store.get(SAVE_KEY) && !confirm('Start a new colony? Your saved colony will be replaced when the new one autosaves.')) return; newScreen(); };
 $('b-newback').onclick = titleScreen;
 $('b-reroll').onclick = () => { $('seed').value = 1 + Math.floor(Math.random() * 99999); };
-$('b-start').onclick = () => { game.start(new Colony({ seed: Math.max(1, +$('seed').value || 1), hero: founder })); game.ui.notify('Welcome, Founder! Follow the objective at the top left.', 'good'); game.save(true); if (!store.get('wwc-help-seen')) { store.set('wwc-help-seen', '1'); show('help'); } };
+$('b-start').onclick = () => { game.start(new Colony({ seed: Math.max(1, +$('seed').value || 1), hero: founder, difficulty })); game.ui.notify('Welcome, Founder! Follow the objective at the top left.', 'good'); game.save(true); if (!store.get('wwc-help-seen')) { store.set('wwc-help-seen', '1'); show('help'); } };
 $('b-continue').onclick = () => { try { game.start(Colony.load(store.get(SAVE_KEY))); } catch (err) { console.error(err); alert('The save could not be loaded. Start a new colony.'); } };
 $('b-help').onclick = () => show('help');
 $('b-helpclose').onclick = () => { if (game.running) show('none'); else titleScreen(); };
@@ -473,7 +474,7 @@ $('b-victitle').onclick = () => titleScreen();
 addEventListener('beforeunload', () => { if (game.running) game.save(true); });
 
 const q = new URLSearchParams(location.search);
-if (q.has('new')) { founder = q.get('hero') || 'Knight'; game.start(new Colony({ seed: +q.get('seed') || 3, hero: founder })); }
+if (q.has('new')) { founder = q.get('hero') || 'Knight'; game.start(new Colony({ seed: +q.get('seed') || 3, hero: founder, difficulty: q.get('difficulty') || 'normal' })); }
 else if (q.has('continue') && store.get(SAVE_KEY)) game.start(Colony.load(store.get(SAVE_KEY)));
 else titleScreen();
 void SANCTUM_POP;

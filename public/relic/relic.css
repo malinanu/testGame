@@ -168,3 +168,8 @@ body.heromode #buildbar, body.heromode #tools .tool:not(.hero), body.heromode #i
   #inspector { top: auto; bottom: 230px; right: 8px; left: 8px; width: auto; max-height: 40vh; }
 }
 #feed .note { max-width: 300px; overflow-wrap: anywhere; }
+
+.seg { display: inline-flex; border: 1px solid #c9a24a88; border-radius: 10px; overflow: hidden; }
+.seg button { font: 600 14px system-ui, sans-serif; color: #fff6e0; background: #0004; border: 0; border-right: 1px solid #c9a24a55; padding: 8px 12px; cursor: pointer; }
+.seg button:last-child { border-right: 0; }
+.seg button.on { background: var(--gold); color: var(--ink); }

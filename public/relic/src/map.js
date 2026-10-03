@@ -91,7 +91,7 @@ export function generateWorld(seed = 1) {
 
   const deposits = [];
   const dep = (kind, dmin, dmax) => { const p = spot(2, 2, dmin, dmax, 10); if (p) deposits.push({ id: `d${deposits.length}`, kind, ...p }); };
-  dep('iron', 15, 24); dep('iron', 24, 40); dep('iron', 28, 42); dep('gold', 30, 42); dep('gold', 32, 44);
+  dep('iron', 14, 21); dep('iron', 24, 40); dep('iron', 28, 42); dep('gold', 30, 42); dep('gold', 32, 44);
 
   // lairs: 3 plain camps, 5 relic sites (relic order: nearer ones first)
   const lairs = [];

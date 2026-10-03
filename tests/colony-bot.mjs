@@ -47,7 +47,7 @@ export class Bot {
     const c = this.c, [w, h] = BUILDINGS[type].size;
     if (!c.affordable(c.costOf(type))) return null;
     let best = null;
-    const R = 26;
+    const R = type === 'sanctum' || type === 'warehouse' ? 40 : 26;
     for (let y = Math.max(1, Math.floor(ay - R)); y < Math.min(H - h, ay + R); y++) for (let x = Math.max(1, Math.floor(ax - R)); x < Math.min(W - w, ax + R); x++) {
       if (c.placeError(type, x, y)) continue;
       let blocked = false;
@@ -87,6 +87,32 @@ export class Bot {
     return true;
   }
 
+  /** The hero clears ordinary lairs close enough to raid the town. */
+  clearNearbyLairs(range = 34) {
+    const c = this.c, blds = [...c.buildings.values()];
+    for (const l of c.lairs) {
+      if (l.cleared || l.relic) continue;
+      if (!blds.some(b => Math.hypot(b.cx - l.x - 1.5, b.cy - l.y - 1.5) < range)) continue;
+      c.heroAt(l.x + 1, l.y + 1); c.clearLair(l.id);
+    }
+    c.heroAt(this.th.cx, this.th.cy + 3);
+  }
+
+  /** A watchtower beside the building most exposed to an uncleared lair. */
+  guardFrontier() {
+    const c = this.c, lairs = c.lairs.filter(l => !l.cleared);
+    if (!lairs.length || !c.affordable(c.costOf('watchtower'))) return;
+    let worst = null;
+    for (const b of c.buildings.values()) {
+      if (b.type === 'townhall' || b.type === 'watchtower') continue;
+      const guarded = c.ofType('watchtower').some(t => Math.hypot(t.cx - b.cx, t.cy - b.cy) <= 10);
+      if (guarded) continue;
+      const d = Math.min(...lairs.map(l => Math.hypot(b.cx - l.x - 1.5, b.cy - l.y - 1.5)));
+      if (d < 30 && (!worst || d < worst.d)) worst = { b, d };
+    }
+    if (worst) this.place('watchtower', worst.b.cx, worst.b.cy);
+  }
+
   run(minutes, plan) {
     for (let t = 0; t < minutes * 60; t += 5) { plan(this, t); this.c.step(5); }
   }
@@ -119,7 +145,8 @@ export function playthrough(seed = 3, { minutes = 240, log = () => {} } = {}) {
     want('forester', Math.max(1, c.count('lumberjack') * 0.6), trees);
     want('hunter', S / 70 + 0.5, trees);
     want('quarry', 1, rocks) && want('stonemason', 1);
-    if (c.count('stonemason')) want('watchtower', Math.min(4, 1 + c.buildings.size / 25));
+    if (c.count('stonemason') && sec % 60 === 0) b.guardFrontier();
+    if (sec === 22 * 60) b.clearNearbyLairs();
     const sawmills = Math.max(2, 1 + c.buildings.size / 20), charcoal = c.count('charcoal');
     if (sec % 60 === 0) { want('sawmill', Math.min(5, sawmills)); want('lumberjack', Math.min(16, (c.count('sawmill') + charcoal) * 1.2 + (c.stock.logs < 3 ? 1 : 0)), trees); }
     const wk = c.work;
@@ -149,6 +176,17 @@ export function playthrough(seed = 3, { minutes = 240, log = () => {} } = {}) {
       if (c.relics.length < 5 && sec % 600 === 0) b.fetchRelic();
     }
     if (c.relics.length >= 5) mark('five_relics');
+    // grow: more homes whenever gold allows (towards 60 craftsmen and 250+ residents)
+    if (sec % 30 === 0 && c.gold > 800 && c.stock.planks > 6) {
+      if (c.tierUnlocked(1) && C < 70) { const h = c.ofType('hut').find(x => !c.upgradeError(x)); if (h && wk.supply[0] > wk.demand[0] + 6) c.upgrade(h.id); else want('hut', c.count('hut') + 1); }
+      else if (P.total < 270) want('hut', c.count('hut') + 1);
+      if (c.tierUnlocked(2) && M < 200 && c.stock.ale > 2) { const h = c.ofType('house').find(x => !c.upgradeError(x)); if (h && wk.supply[1] > wk.demand[1] + 4) c.upgrade(h.id); }
+    }
+    // rich but short of Sanctum goods: buy them from caravans, like a player would
+    if (c.relics.length >= 5 && c.gold > 6000) {
+      want('tradepost', 1);
+      if (c.caravan.here) for (const [g, n] of Object.entries(c.costOf('sanctum'))) if (g !== 'gold' && c.stock[g] < n && c.gold > 5000) c.trade(g, 5);
+    }
     if (!c.count('sanctum') && c.relics.length >= 5 && c.pop.total >= 250) { if (b.place('sanctum')) mark('sanctum'); }
     if (P.total >= 100) mark('pop100');
     if (P.total >= 200) mark('pop200');

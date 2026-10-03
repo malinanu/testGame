@@ -40,7 +40,7 @@ export const TIERS = [
     basic: [{ good: 'bread', rate: 1 / 40 }, { good: 'textiles', rate: 1 / 80 }, { service: 'market' }],
     luxury: [{ good: 'ale', rate: 1 / 60 }, { service: 'tavern' }],
     unlock: { settlers: 30, relics: 1 }, upgrade: { planks: 3, bricks: 2 } },
-  { id: 'merchants', name: 'Merchants', icon: '🧑‍💼', house: 'manor', cap: 20, tax: 2.4,
+  { id: 'merchants', name: 'Merchants', icon: '🧑‍💼', house: 'manor', cap: 20, tax: 2.8,
     basic: [{ good: 'bread', rate: 1 / 40 }, { good: 'ale', rate: 1 / 40 }, { good: 'textiles', rate: 1 / 80 }, { service: 'tavern' }, { service: 'chapel' }],
     luxury: [{ good: 'jewelry', rate: 1 / 120 }, { good: 'tools', rate: 1 / 300 }],
     unlock: { craftsmen: 60, relics: 3 }, upgrade: { planks: 4, bricks: 6, tools: 2 } },
@@ -76,7 +76,7 @@ export const BUILDINGS = {
     desc: 'Extends your territory. Can be built in explored land just outside it.' },
   tradepost:  { name: 'Trading Post', cat: 'public', size: [3, 3], cost: { gold: 220, planks: 10 }, upkeep: 10, trade: true,
     desc: 'Merchant caravans stop here to buy and sell goods.' },
-  sanctum:    { name: 'Relic Sanctum', cat: 'public', size: [5, 5], cost: { gold: 6000, planks: 40, bricks: 50, tools: 15, jewelry: 12 }, upkeep: 0, unique: true, tier: 2, relics: 5, monument: true,
+  sanctum:    { name: 'Relic Sanctum', cat: 'public', size: [5, 5], cost: { gold: 4500, planks: 40, bricks: 50, tools: 15, jewelry: 12 }, upkeep: 0, unique: true, tier: 2, relics: 5, monument: true,
     desc: 'The monument that binds the five relics. Building it wins the game.' },
 
   lumberjack: { name: 'Lumberjack', cat: 'production', size: [2, 2], cost: { gold: 50, planks: 2 }, upkeep: 3, workers: { tier: 0, n: 3 },
@@ -138,6 +138,13 @@ export const LAIR_KINDS = {
 };
 
 // ---------------------------------------------------------------- economy constants
+/** Difficulty: start gold, upkeep and tax multipliers, raid pacing. */
+export const DIFFICULTY = {
+  easy:   { name: 'Relaxed',  gold: 2500, upkeep: 0.75, tax: 1.15, raidEvery: 1.6, grace: 2400, fire: 1.5 },
+  normal: { name: 'Settler',  gold: 1500, upkeep: 1,    tax: 1,    raidEvery: 1,   grace: 1500, fire: 1 },
+  hard:   { name: 'Pioneer',  gold: 1000, upkeep: 1.2,  tax: 0.9,  raidEvery: 0.7, grace: 1080, fire: 0.75 },
+};
+export const GRANT_POP = 40;            // upkeep is halved until the colony first reaches this many residents
 export const START = { gold: 1500, stock: { planks: 30, logs: 10, food: 20, tools: 8, bricks: 4 } };
 export const CARRIER_SPEED = 4;       // tiles / second along roads
 export const LOCAL_CAP = 4;             // output buffer per building

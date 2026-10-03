@@ -66,7 +66,7 @@ export class UI {
   }
   tipHtml(kind, el) {
     const c = this.c;
-    if (kind === 'gold') return `<b>💰 Gold</b><br>Taxes <span style="color:#2a6a20">+${c.stats.income.toFixed(0)}</span>/min · Upkeep <span style="color:#a02a1a">−${c.stats.upkeep.toFixed(0)}</span>/min<br><span class="dim">Keep the balance positive. Happy residents pay more tax.</span>`;
+    if (kind === 'gold') return `<b>💰 Gold</b><br>Taxes <span style="color:#2a6a20">+${c.stats.income.toFixed(0)}</span>/min · Upkeep <span style="color:#a02a1a">−${c.stats.upkeep.toFixed(0)}</span>/min${c.grant ? '<br><b style="color:#2a6a20">🎁 Founding grant: upkeep halved until 40 residents</b>' : ''}<br><span class="dim">Keep the balance positive. Happy residents pay more tax. Idle workshops cost half upkeep.</span>`;
     if (kind === 'pop') return `<b>Population ${Math.floor(c.pop.total)}</b><br>` + TIERS.map((t, i) => `${t.icon} ${t.name}: ${Math.floor(c.pop[t.id])} · workers needed ${c.work.demand[i]}${c.work.factor[i] < 1 ? ' ⚠️ shortage' : ''}${c.tierUnlocked(i) ? '' : ' (locked)'}`).join('<br>');
     if (kind === 'relics') return `<b>Relics ${c.relics.length}/5</b><br>` + RELICS.map(r => `${c.relics.includes(r.id) ? '✅' : c.hero.carry === r.id ? '🎒' : '❔'} ${r.icon} ${r.name}<br><span class="dim">${r.boon}</span>`).join('<br>');
     if (kind === 'clock') return `<b>Day ${Math.floor(c.time / 240) + 1}</b> · ${c.night ? 'Night: raids come in the dark' : 'Day'}`;

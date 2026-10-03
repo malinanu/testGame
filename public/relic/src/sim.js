@@ -3,7 +3,7 @@
 // drains `events` every frame; the UI calls the action methods.
 import {
   W, H, STEP, DAY, GOODS, GOOD_KEYS, TIERS, BUILDINGS, RELICS, LAIR_KINDS, START, CARRIER_SPEED, LOCAL_CAP,
-  RAID_EVERY, RAID_RANGE, RAID_GRACE, FIRE_TIME, CARAVAN_EVERY, CARAVAN_STAY, QUESTS, SANCTUM_POP,
+  RAID_EVERY, RAID_RANGE, FIRE_TIME, CARAVAN_EVERY, CARAVAN_STAY, QUESTS, SANCTUM_POP, DIFFICULTY, GRANT_POP,
 } from './data.js';
 import { generateWorld, rng, idx, inMap, dist, T } from './map.js';
 
@@ -12,8 +12,9 @@ const N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
 export class Colony {
   /** new Colony({ seed, hero }) starts a fresh game; Colony.load(json) restores one. */
-  constructor({ seed = 1, hero = 'Knight', world = null } = {}) {
+  constructor({ seed = 1, hero = 'Knight', world = null, difficulty = 'normal' } = {}) {
     this.seed = seed; this.hero = { cls: hero, carry: null, x: 0, y: 0 };
+    this.difficulty = DIFFICULTY[difficulty] ? difficulty : 'normal'; this.grant = true;
     const w = world || generateWorld(seed);
     this.world = w; this.ground = w.ground; this.tree = w.tree;
     this.deposits = w.deposits.map(d => ({ ...d, found: false }));
@@ -24,7 +25,7 @@ export class Colony {
     this.occ = new Int32Array(W * H);         // building id occupying the tile (0 = none)
     this.owned = new Uint8Array(W * H);       // territory
     this.buildings = new Map(); this.nextId = 1;
-    this.gold = START.gold; this.stock = Object.fromEntries(GOOD_KEYS.map(k => [k, START.stock[k] || 0]));
+    this.gold = this.diff.gold; this.stock = Object.fromEntries(GOOD_KEYS.map(k => [k, START.stock[k] || 0]));
     this.time = 0; this.acc = 0; this.rand = rng(seed * 4099 + 77);
     this.relics = []; this.events = []; this.raids = []; this.nextRaidId = 1;
     this.questIdx = 0; this.won = false; this.over = false;
@@ -40,10 +41,12 @@ export class Colony {
       this.reveal(th.cx, th.cy, BUILDINGS.townhall.vision);
       this.hero.x = th.cx; this.hero.y = th.cy + 4;
       this.recompute();
+      this.notify(`Founding grant: upkeep is halved until your colony reaches ${GRANT_POP} residents.`, 'good');
     }
   }
 
   // ------------------------------------------------------------------ helpers
+  get diff() { return DIFFICULTY[this.difficulty] || DIFFICULTY.normal; }
   emit(type, data = {}) { this.events.push({ type, ...data }); }
   notify(text, kind = 'info') { this.emit('notify', { text, kind }); }
   get day() { return (this.time % DAY) / DAY; }            // 0 = dawn
@@ -340,7 +343,7 @@ export class Colony {
     let income = 0, upkeep = 0;
     for (const b of blds) {
       const def = BUILDINGS[b.type];
-      if (def.upkeep) upkeep += def.upkeep;
+      if (def.upkeep) upkeep += def.cycle ? def.upkeep * (0.5 + 0.5 * Math.min(1, b.prod || 0)) : def.upkeep; // idle workshops pay half
       if (b.fire > 0) {
         b.fire -= STEP;
         if (b.fire <= 0) { b.fire = 0; b.ruined = true; if (b.tier != null) b.residents = 0; this.dirty = true; this.emit('ruined', { id: b.id }); this.notify(`${def.name} burned down. Repair it from its panel.`, 'bad'); }
@@ -348,6 +351,8 @@ export class Colony {
       if (b.tier != null) income += this.tickResidence(b, services, perMin);
       else if (def.cycle) this.tickProduction(b, def);
     }
+    if (this.grant && pop.total >= GRANT_POP) { this.grant = false; this.notify(`Your colony has ${GRANT_POP} residents: the founding grant ends and full upkeep applies.`, 'warn'); }
+    upkeep *= this.diff.upkeep * (this.grant ? 0.5 : 1); income *= this.diff.tax;
     const tax = income * perMin, up = upkeep * perMin;
     this.gold += tax - up;
     const k = 1 - STEP / 30; // ~30 s smoothing for the per-minute readouts
@@ -495,14 +500,15 @@ export class Colony {
   // ------------------------------------------------------------------ raids
   tickRaids(blds) {
     const targets = blds.filter(b => b.type !== 'townhall' && b.type !== 'sanctum' && !b.ruined && !b.fire);
-    const calm = this.time < RAID_GRACE || this.pop.total < 40;
+    const calm = this.time < this.diff.grace || this.pop.total < 40, every = RAID_EVERY.map(v => v * this.diff.raidEvery);
     for (const l of this.lairs) {
       if (l.cleared || calm) continue;
       const near = targets.some(b => dist(b.cx, b.cy, l.x + 1.5, l.y + 1.5) < RAID_RANGE);
       if (!near) { l.nextRaid = 0; continue; }
-      if (!l.nextRaid) { l.nextRaid = this.time + RAID_EVERY[0] + this.rand() * (RAID_EVERY[1] - RAID_EVERY[0]); continue; }
+      if (!l.nextRaid) { l.nextRaid = this.time + every[0] + this.rand() * (every[1] - every[0]); continue; }
       if (this.time < l.nextRaid || !this.night) continue;
-      l.nextRaid = this.time + RAID_EVERY[0] + this.rand() * (RAID_EVERY[1] - RAID_EVERY[0]);
+      l.nextRaid = this.time + every[0] + this.rand() * (every[1] - every[0]);
+      if (!l.found) { l.found = true; this.emit('found', { what: 'lair', id: l.id }); this.reveal(l.x + 1.5, l.y + 1.5, 4); }
       const target = targets.reduce((best, b) => { const d = dist(b.cx, b.cy, l.x + 1.5, l.y + 1.5); return !best || d < best.d ? { b, d } : best; }, null);
       if (!target) continue;
       const raid = { id: this.nextRaidId++, lair: l.id, target: target.b.id, start: this.time, arrive: this.time + Math.max(20, target.d / 1.2), repelled: false, size: LAIR_KINDS[l.kind].guards.length };
@@ -517,7 +523,7 @@ export class Colony {
       if (!b || r.repelled) { this.emit('raidEnd', { raid: r, outcome: 'repelled' }); continue; }
       const tower = blds.find(t => BUILDINGS[t.type].guard && this.active(t) && dist(t.cx, t.cy, b.cx, b.cy) <= BUILDINGS[t.type].range);
       if (tower) { this.emit('raidEnd', { raid: r, outcome: 'tower', tower: tower.id }); this.notify('The watchtower archers drove the raiders off.', 'good'); continue; }
-      b.fire = FIRE_TIME; this.dirty = true;
+      b.fire = FIRE_TIME * this.diff.fire; this.dirty = true;
       this.emit('raidEnd', { raid: r, outcome: 'fire' }); this.emit('fire', { id: b.id });
       this.notify(`Your ${BUILDINGS[b.type].name} is on fire! Pay to extinguish it before it burns down.`, 'bad');
     }
@@ -562,7 +568,12 @@ export class Colony {
     this.notify(`Chest: ${this.lootText(c.loot)}`, 'good');
     return c.loot;
   }
-  gain(loot) { for (const [k, v] of Object.entries(loot)) { if (k === 'gold') this.gold += v; else this.stock[k] = (this.stock[k] || 0) + v; } }
+  gain(loot) {
+    for (const [k, v] of Object.entries(loot)) {
+      if (k === 'gold') this.gold += v;
+      else this.stock[k] = Math.max(this.stock[k] || 0, Math.min(this.cap || 40, (this.stock[k] || 0) + v)); // storage limit
+    }
+  }
   lootText(loot) { return Object.entries(loot).map(([k, v]) => k === 'gold' ? `${v} gold` : `${v} ${GOODS[k].name}`).join(', '); }
   clearLair(id) {
     const l = this.lairs.find(q => q.id === id);
@@ -618,7 +629,7 @@ export class Colony {
     const enc = a => String.fromCharCode(...a.map(v => v + 48));
     const s = a => { let out = ''; for (let i = 0; i < a.length; i += 4096) out += enc(Array.from(a.subarray(i, i + 4096))); return out; };
     return JSON.stringify({
-      v: 1, seed: this.seed, hero: this.hero, gold: this.gold, stock: this.stock, time: this.time, acc: this.acc,
+      v: 1, seed: this.seed, hero: this.hero, difficulty: this.difficulty, grant: this.grant, gold: this.gold, stock: this.stock, time: this.time, acc: this.acc,
       relics: this.relics, questIdx: this.questIdx, won: this.won, caravan: this.caravan, peak: this.peak, unlockedSeen: this.unlockedSeen || {},
       nextId: this.nextId, nextRaidId: this.nextRaidId, raids: this.raids, trips: this.trips || [],
       tree: s(this.tree), fog: s(this.fog), road: s(this.road),
@@ -629,7 +640,8 @@ export class Colony {
   static load(json) {
     const d = typeof json === 'string' ? JSON.parse(json) : json;
     const w = generateWorld(d.seed); w.restoring = true;
-    const c = new Colony({ seed: d.seed, hero: d.hero.cls, world: w });
+    const c = new Colony({ seed: d.seed, hero: d.hero.cls, world: w, difficulty: d.difficulty || 'normal' });
+    c.grant = d.grant ?? false;
     const dec = (str, arr) => { for (let i = 0; i < arr.length; i++) arr[i] = str.charCodeAt(i) - 48; };
     dec(d.tree, c.tree); dec(d.fog, c.fog); dec(d.road, c.road);
     Object.assign(c, { hero: d.hero, gold: d.gold, stock: d.stock, time: d.time, acc: d.acc, relics: d.relics, questIdx: d.questIdx, won: d.won, caravan: d.caravan,

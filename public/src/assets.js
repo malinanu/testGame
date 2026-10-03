@@ -1,12 +1,53 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 
 // Each .gltf gets its own parser, so without this every model file would download, decode and upload its
 // own copy of the pack texture (the KayKit packs share one atlas per pack across dozens of files).
 THREE.Cache.enabled = true;
-const loader = new GLTFLoader();
+const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
 const load = (url) => loader.loadAsync(url).then(g => { shareMaterials(g.scene); return g; });
+
+/** A copy of geometry with every attribute as plain floats (meshopt packs store quantized integers). */
+function floatGeometry(src) {
+  const g = new THREE.BufferGeometry();
+  for (const [k, a] of Object.entries(src.attributes)) {
+    if (a.array instanceof Float32Array && !a.isInterleavedBufferAttribute) { g.setAttribute(k, a.clone()); continue; }
+    const n = a.count, s = a.itemSize, out = new Float32Array(n * s), get = [a.getX, a.getY, a.getZ, a.getW];
+    for (let i = 0; i < n; i++) for (let j = 0; j < s; j++) out[i * s + j] = get[j].call(a, i); // getX… undo normalization
+    g.setAttribute(k, new THREE.BufferAttribute(out, s));
+  }
+  if (src.index) g.setIndex(src.index.clone());
+  for (const grp of src.groups) g.addGroup(grp.start, grp.count, grp.materialIndex);
+  return g;
+}
+
+/**
+ * One packed asset folder (scripts/pack-assets.mjs): a single GLB whose top-level "@name" nodes are the
+ * original files. Returns { name: Group } shaped like the per-file scenes (meshes with their transforms
+ * baked into float geometry, so code that instances a mesh's geometry directly sees the same data),
+ * or null when the pack is missing (callers then load the per-file originals).
+ */
+export async function loadPack(url) {
+  let g;
+  try { g = await load(url); } catch { return null; }
+  const out = {}, m = new THREE.Matrix4(), inv = new THREE.Matrix4();
+  g.scene.updateMatrixWorld(true);
+  for (const w of g.scene.children) {
+    if (!w.name.startsWith('@')) continue;
+    const grp = new THREE.Group(); grp.name = w.name.slice(1);
+    inv.copy(w.matrixWorld).invert();
+    w.traverse(o => {
+      if (!o.isMesh) return;
+      const mesh = new THREE.Mesh(floatGeometry(o.geometry).applyMatrix4(m.multiplyMatrices(inv, o.matrixWorld)), o.material);
+      mesh.name = o.name; grp.add(mesh);
+    });
+    out[grp.name] = grp;
+  }
+  out.__animations = g.animations;
+  return out;
+}
 
 /** One material per (texture image, material settings): later files reuse the first file's material. */
 const shared = new Map();
@@ -62,10 +103,17 @@ export async function loadAssets({ base = '', props = PROPS, forest = FOREST, ch
   let done = 0;
   const track = p => { jobs.push(p.then(() => onProgress?.(++done, jobs.length))); };
   for (const n of chars) track(load(`${base}assets/chars/${n}.glb`).then(g => a.chars[n] = mergeCharacter(g.scene)));
-  for (const n of props) track(load(`${base}assets/props/${n}.gltf`).then(g => a.props[n] = g.scene));
-  for (const n of forest) track(load(`${base}assets/forest/${n}_Color1.gltf`).then(g => a.forest[n] = g.scene));
-  if (anims) for (const f of ['General', 'MovementBasic'])
-    track(load(`${base}assets/anim/Rig_Medium_${f}.glb`).then(g => g.animations.forEach(c => a.clips[c.name] = c)));
+  // packed folders (one request each); the per-file originals are the fallback
+  const pick = async (pack, names, file, into) => {
+    const P = names.length ? await loadPack(`${base}assets/packs/${pack}.glb`) : null;
+    await Promise.all(names.map(n => P?.[file(n)] ? (into[n] = P[file(n)]) : load(`${base}assets/${pack}/${file(n)}.gltf`).then(g => { into[n] = g.scene; })));
+  };
+  track(pick('props', props, n => n, a.props));
+  track(pick('forest', forest, n => `${n}_Color1`, a.forest));
+  if (anims) track(loadPack(`${base}assets/packs/clips.glb`).then(async P => {
+    const list = P ? P.__animations : (await Promise.all(['General', 'MovementBasic'].map(f => load(`${base}assets/anim/Rig_Medium_${f}.glb`)))).flatMap(g => g.animations);
+    list.forEach(c => a.clips[c.name] = c);
+  }));
   await Promise.all(jobs);
   return a;
 }

@@ -1,7 +1,7 @@
 // Loads every model Wildwood Colony uses: characters/props/forest via the shared loader, plus the
 // Dungeon, Resource Bits and RPG Tools kit pieces (all GLTFs of a pack share one texture).
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { loadAssets, shareMaterials } from '../../src/assets.js';
+import { loadAssets, shareMaterials, loadPack } from '../../src/assets.js';
 
 export const DUNGEON = ['wall', 'wall_doorway', 'wall_window_open', 'wall_window_closed', 'wall_arched', 'wall_broken',
   'wall_scaffold', 'wall_doorway_scaffold', 'floor_wood_large', 'floor_tile_large', 'floor_dirt_large', 'pillar', 'pillar_decorated', 'stairs_wood', 'banner_patternA_red', 'banner_patternB_blue', 'banner_patternC_green', 'banner_shield_yellow', 'banner_thin_red', 'banner_triple_blue',
@@ -22,9 +22,10 @@ export async function loadGame(onProgress = () => {}) {
   const loader = new GLTFLoader();
   let done = 0; const total = DUNGEON.length + RESOURCES.length + TOOLS.length + 40;
   const tick = () => onProgress(++done, total);
+  // one packed GLB per folder (scripts/pack-assets.mjs); any piece missing from it loads per file
   const pack = async (dir, names) => {
-    const out = {};
-    await Promise.all(names.map(n => loader.loadAsync(`../assets/${dir}/${n}.gltf`).then(g => { shareMaterials(g.scene); out[n] = g.scene; tick(); })));
+    const out = {}, P = await loadPack(`../assets/packs/${dir}.glb`);
+    await Promise.all(names.map(n => P?.[n] ? (out[n] = P[n], tick()) : loader.loadAsync(`../assets/${dir}/${n}.gltf`).then(g => { shareMaterials(g.scene); out[n] = g.scene; tick(); })));
     return out;
   };
   const [base, dun, res, tool] = await Promise.all([

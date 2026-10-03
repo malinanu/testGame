@@ -155,7 +155,9 @@ export class World3D {
     if (on) {
       const v = this.c.tree[k] || 1, pool = this.trees[(v - 1) % 8];
       const m = this.treeMatrix(x, y, v);
-      if (animate) { const s0 = new THREE.Vector3(), p = new THREE.Vector3(), q = new THREE.Quaternion(); m.decompose(p, q, s0); this.anims.push({ t: 0, dur: 3, fn: k2 => pool.set(k, new THREE.Matrix4().compose(p, q, s0.clone().multiplyScalar(0.15 + 0.85 * k2))) }); }
+      if (animate) { const s0 = new THREE.Vector3(), p = new THREE.Vector3(), q = new THREE.Quaternion(); m.decompose(p, q, s0); const m2 = new THREE.Matrix4(), s1 = new THREE.Vector3();
+        // the sapling may be cut or built over while it grows: then stop drawing it
+        this.anims.push({ t: 0, dur: 3, fn: k2 => { if (this.c.tree[k]) pool.set(k, m2.compose(p, q, s1.copy(s0).multiplyScalar(0.15 + 0.85 * k2))); } }); }
       else pool.set(k, m);
     } else {
       for (const pool of this.trees) if (pool.has(k)) {
@@ -407,7 +409,7 @@ export class World3D {
     switch (e.type) {
       case 'tree': if (!e.deferred) this.setTree(e.x, e.y, e.on); break;
       case 'road': this.roadsDirty = true; if (e.on) this.clearDecor(e.x, e.y); break;
-      case 'built': this.addBuilding(this.c.buildings.get(e.id), 'construct'); this.syncFeatures(); break;
+      case 'built': { const b = this.c.buildings.get(e.id); if (b) this.addBuilding(b, 'construct'); this.syncFeatures(); break; }
       case 'removed': this.removeBuilding(e.id); this.syncFeatures(); break;
       case 'upgraded': case 'ruined': case 'repaired': { const b = this.c.buildings.get(e.id); if (b) this.addBuilding(b, e.type === 'upgraded' ? 'construct' : e.type !== 'ruined'); break; }
       case 'fog': case 'territory': this.fogDirty = true; break;

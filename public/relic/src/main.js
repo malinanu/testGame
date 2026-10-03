@@ -103,6 +103,10 @@ class Game {
   start(colony) {
     this.teardown();
     this.colony = colony;
+    // the world is built from the current state: 'built' events already queued (the founding Town Hall)
+    // would rebuild those buildings behind scaffolding
+    colony.events = colony.events.filter(e => e.type !== 'built');
+    this.selected = null; this.roadDrag = null; this.setSpeed(1);
     this.world = new World3D(this.scene, this.assets, colony);
     this.fx = new VFX(this.scene, '../assets/vfx/'); this.fx.preload(['smoke_01_a', 'spark_01_a', 'fire_8x8', 'star_06_a', 'smoke_07_a']); this.fx.maxParticles = PARTICLES[this.quality];
     this.units = new Units(this);
@@ -110,7 +114,7 @@ class Game {
     this.adv = new Adventure(this);
     this.thumbs ||= renderThumbs(this.world.kit, this.renderer);
     this.ui = new UI(this);
-    this.ui.renderBuild();
+    this.ui.renderBuild(); this.ui.renderInspector(); // hides the previous game's panel
     const th = colony.ofType('townhall')[0], [x, z] = tileToWorld(th.cx - 0.5, th.cy - 0.5);
     this.cam.focus(x, z + 4, 0.38); this.cam.target.copy(this.cam.goal);
     this.units.restore();
@@ -145,6 +149,7 @@ class Game {
     const gone = [...this.scene.children].filter(o => o !== this.hemi && o !== this.sun && o !== this.sun.target);
     for (const o of gone) this.scene.remove(o);
     this.disposeScene([...gone, ...(this.units?.pool || []).map(a => a.root)]);
+    this.ui?.dispose();
     this.colony = null; this.running = false;
   }
   save(quiet = false) {
@@ -160,7 +165,9 @@ class Game {
 
   // ------------------------------------------------------------------ modes
   setMode(mode, type = null) {
+    if (this.heroMode && mode !== 'select') return; // town tools are for the town view
     if (mode !== 'road') this.paved = false;
+    this.roadDrag = null; // a cancelled drag must not build when the button is released
     this.mode = mode; this.buildType = type;
     this.clearGhost();
     $('tool-road').classList.toggle('on', mode === 'road' && !this.paved);
@@ -250,8 +257,13 @@ class Game {
       this.click(p, e);
     });
     addEventListener('keydown', e => {
-      if (!this.running || e.target.tagName === 'INPUT') return;
+      if (!this.running || e.target.tagName === 'INPUT' || e.ctrlKey || e.metaKey || e.altKey) return;
       const k = e.code;
+      if (modal) { // menu, stats, help, victory: only Escape (back to the game)
+        const back = { 'screen-menu': 'm-resume', 'screen-stats': 'b-statsclose', 'screen-help': 'b-helpclose' }[document.querySelector('.screen.active')?.id];
+        if (k === 'Escape' && back) $(back).click();
+        return;
+      }
       if (k === 'KeyH') return this.setHeroMode(!this.heroMode);
       if (this.heroMode) {
         if (k === 'KeyF') this.adv.attack();
@@ -269,13 +281,13 @@ class Game {
       else if (k === 'Space') { e.preventDefault(); this.setSpeed(this.speed ? 0 : 1); }
       else if (k === 'Digit1') this.setSpeed(1); else if (k === 'Digit2') this.setSpeed(2); else if (k === 'Digit3') this.setSpeed(4);
       else if (k === 'KeyM') $('minimapwrap').classList.toggle('hidden');
-      else if (k === 'F1') { e.preventDefault(); show('help'); }
+      else if (k === 'F1') { e.preventDefault(); this.pause(); show('help'); }
     });
     $('tool-road').onclick = () => this.roadTool(false);
     $('tool-paved').onclick = () => this.roadTool(true);
     $('b-stats').onclick = () => this.openStats();
     $('statstabs').querySelectorAll('button').forEach(b => { b.onclick = () => { $('statstabs').querySelectorAll('button').forEach(q => q.classList.toggle('on', q === b)); this.ui.renderStats(b.dataset.tab); }; });
-    $('b-statsclose').onclick = () => { show('none'); this.setSpeed(this.prevSpeed || 1); };
+    $('b-statsclose').onclick = () => { show('none'); this.resume(); };
     $('tool-demolish').onclick = () => this.setMode(this.mode === 'demolish' ? 'select' : 'demolish');
     $('tool-hero').onclick = () => this.setHeroMode(!this.heroMode);
     $('tool-map').onclick = () => {
@@ -292,7 +304,7 @@ class Game {
     this.paved = paved; this.setMode('road');
   }
   openStats() {
-    this.prevSpeed = this.speed || this.prevSpeed || 1; this.setSpeed(0);
+    this.pause();
     const tab = this.ui.statsTab || 'goods';
     $('statstabs').querySelectorAll('button').forEach(q => q.classList.toggle('on', q.dataset.tab === tab));
     this.ui.renderStats(tab); show('stats');
@@ -439,6 +451,7 @@ class Game {
     const c = this.colony, sel = this.selected;
     const b = sel?.kind === 'building' ? c.buildings.get(sel.id) : null;
     let r = null;
+    if (sel?.kind === 'building' && !b && act !== 'close') { this.selected = null; this.ui.renderInspector(); return; }
     if (act === 'close') { this.selected = null; }
     else if (act === 'upgrade') { r = c.upgrade(b.id); if (!r.error) { this.sfx.chime(); this.fx.burst(new THREE.Vector3(...this.worldOf(b, 3)), { tex: 'star_06_a', color: 0xffd54a, count: 18, speed: 4 }); } }
     else if (act === 'repair') { r = c.repair(b.id); if (!r.error) this.sfx.clang(); }
@@ -456,6 +469,7 @@ class Game {
 
   setHeroMode(on) {
     if (!this.colony) return;
+    if (on) this.setMode('select');
     this.heroMode = on;
     document.body.classList.toggle('heromode', on);
     $('herohud').classList.toggle('hidden', !on);
@@ -464,14 +478,17 @@ class Game {
     else this.cam.setHero(null);
   }
 
-  openMenu() { this.prevSpeed = this.speed || this.prevSpeed || 1; this.setSpeed(0); show('menu'); }
+  /** Pause for a full-screen panel and remember the speed (0 too: a paused game stays paused). */
+  pause() { if (!modal) this.prevSpeed = this.speed; this.setSpeed(0); }
+  resume() { this.setSpeed(this.prevSpeed ?? 1); }
+  openMenu() { this.pause(); show('menu'); }
 
   // ------------------------------------------------------------------ events from the sim
   drain() {
     const c = this.colony, ev = c.events; c.events = [];
     for (const e of ev) {
       // a lumberjack walks over and chops before the tree falls
-      if (e.type === 'tree' && !e.on && e.by) { const job = this.units.chop(e.by, e.x, e.y); if (job) { e.deferred = true; job.onFelled = () => this.world.setTree(e.x, e.y, false); } }
+      if (e.type === 'tree' && !e.on && e.by) { const job = this.units.chop(e.by, e.x, e.y); if (job) { e.deferred = true; job.onFelled = () => { if (!this.colony.tree[e.y * W + e.x]) this.world.setTree(e.x, e.y, false); }; } }
       this.world.handle(e);
       switch (e.type) {
         case 'notify': this.ui.notify(e.text, e.kind); break;
@@ -482,7 +499,8 @@ class Game {
         case 'raidEnd': this.adv.endRaid(e.raid, e.outcome); if (e.outcome === 'tower') this.sfx.twang(); break;
         case 'fire': this.sfx.thud(true); break;
         case 'tree': if (!e.on && e.by) this.sfx.noise?.(0.25, { freq: 900, gain: 0.04 }); break;
-        case 'removed': case 'territory': case 'fog': case 'road': this.ui.mmDirty = true; this.buildDirty = true; break;
+        case 'removed': if (this.selected?.kind === 'building' && this.selected.id === e.id) { this.selected = null; this.ui.renderInspector(); } // falls through
+        case 'territory': case 'fog': case 'road': this.ui.mmDirty = true; this.buildDirty = true; break;
         case 'relic': this.buildDirty = true; break;
         case 'quest': this.sfx.chime(); break;
         case 'festival': this.sfx.chime(); this.sfx.magic(); break;
@@ -672,12 +690,12 @@ function newScreen() {
 $('b-new').onclick = () => { if (store.get(SAVE_KEY) && !confirm('Start a new colony? Your saved colony will be replaced when the new one autosaves.')) return; newScreen(); };
 $('b-newback').onclick = titleScreen;
 $('b-reroll').onclick = () => { $('seed').value = 1 + Math.floor(Math.random() * 99999); };
-$('b-start').onclick = () => { game.start(new Colony({ seed: Math.max(1, +$('seed').value || 1), hero: founder, difficulty })); game.ui.notify('Welcome, Founder! Follow the objective at the top left.', 'good'); game.save(true); if (!store.get('wwc-help-seen')) { store.set('wwc-help-seen', '1'); show('help'); } };
+$('b-start').onclick = () => { game.start(new Colony({ seed: Math.max(1, +$('seed').value || 1), hero: founder, difficulty })); game.ui.notify('Welcome, Founder! Follow the objective at the top left.', 'good'); game.save(true); if (!store.get('wwc-help-seen')) { store.set('wwc-help-seen', '1'); game.pause(); show('help'); } };
 $('b-continue').onclick = () => { try { game.start(Colony.load(store.get(SAVE_KEY))); } catch (err) { console.error(err); alert('The save could not be loaded. Start a new colony.'); } };
 $('b-help').onclick = () => show('help');
-$('b-helpclose').onclick = () => { if (game.running) show('none'); else titleScreen(); };
-$('m-resume').onclick = () => { show('none'); game.setSpeed(game.prevSpeed || 1); };
-$('m-save').onclick = () => { game.save(); show('none'); game.setSpeed(game.prevSpeed || 1); };
+$('b-helpclose').onclick = () => { if (game.running) { show('none'); game.resume(); } else titleScreen(); };
+$('m-resume').onclick = () => { show('none'); game.resume(); };
+$('m-save').onclick = () => { game.save(); show('none'); game.resume(); };
 $('m-help').onclick = () => show('help');
 const soundLabel = () => { $('m-sound').textContent = game.sfx.muted ? '🔇 Sound: off' : '🔊 Sound: on'; };
 $('m-sound').onclick = () => { game.sfx.setMuted(!game.sfx.muted); soundLabel(); }; soundLabel();

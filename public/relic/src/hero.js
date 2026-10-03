@@ -255,7 +255,7 @@ export class Adventure {
     }
     if (e.raid) {
       const others = this.creatures.filter(k => k.raid?.id === e.raid.id && !k.dead).length;
-      if (!others) { c.repelRaid(e.raid.id); c.notify('Your Founder drove off the raiders!', 'good'); }
+      if (!others && c.repelRaid(e.raid.id)) c.notify('Your Founder drove off the raiders!', 'good'); // not if they already struck
     }
   }
 

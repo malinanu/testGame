@@ -132,6 +132,14 @@ export class Colony {
   depositAt(x, y) { return this.deposits.find(d => x >= d.x && x < d.x + 2 && y >= d.y && y < d.y + 2); }
 
   costOf(type) { return BUILDINGS[type].cost || {}; }
+  /** Everything put into a building: upgraded homes count the hut plus each tier's upgrade. */
+  valueOf(type) {
+    const r = BUILDINGS[type].residence;
+    if (!r) return this.costOf(type);
+    const v = { ...this.costOf('hut') };
+    for (let t = 1; t <= r; t++) for (const [k, n] of Object.entries(TIERS[t].upgrade || {})) v[k] = (v[k] || 0) + n;
+    return v;
+  }
   affordable(cost) { for (const [k, v] of Object.entries(cost)) { if (k === 'gold' ? this.gold < v : (this.stock[k] || 0) < v) return false; } return true; }
   pay(cost, sign = 1) { for (const [k, v] of Object.entries(cost)) { if (k === 'gold') this.gold -= v * sign; else this.stock[k] = (this.stock[k] || 0) - v * sign; } }
   missing(cost) { return Object.entries(cost).filter(([k, v]) => (k === 'gold' ? this.gold : this.stock[k] || 0) < v).map(([k]) => k === 'gold' ? 'gold' : GOODS[k].name); }
@@ -204,11 +212,12 @@ export class Colony {
   demolish(x, y) {
     if (!inMap(x, y)) return { error: 'Nothing here' };
     const k = idx(x, y);
-    if (this.road[k]) { this.setRoad(x, y, false); return { road: true }; }
+    if (this.road[k]) { if (this.road[k] === 2) this.gain({ bricks: 1 }); this.setRoad(x, y, false); return { road: true }; }
     const b = this.buildings.get(this.occ[k]);
     if (!b) return { error: 'Nothing here' };
     if (b.type === 'townhall' || b.type === 'sanctum') return { error: 'This cannot be demolished' };
-    for (const [g, v] of Object.entries(this.costOf(b.type))) if (g !== 'gold') this.stock[g] += Math.floor(v / 2);
+    const back = {}; for (const [g, v] of Object.entries(this.valueOf(b.type))) if (g !== 'gold' && v >= 2) back[g] = Math.floor(v / 2);
+    this.gain(back);
     this.remove(b);
     return { removed: b.type };
   }
@@ -248,7 +257,7 @@ export class Colony {
   /** Extinguish a fire or rebuild a ruin. */
   repairCost(b) {
     if (b.fire) return { gold: 40 };
-    if (b.ruined) { const c = {}; for (const [k, v] of Object.entries(this.costOf(b.type))) c[k] = Math.ceil(v / 2); return c; }
+    if (b.ruined) { const c = {}; for (const [k, v] of Object.entries(this.valueOf(b.type))) c[k] = Math.ceil(v / 2); return c; }
     return null;
   }
   repair(id) {
@@ -502,7 +511,7 @@ export class Colony {
         if (b) { t.goods = { ...b.out }; b.out = {}; b.pending = 0; } else t.goods = {};
       }
       if (this.time >= t.end) {
-        for (const [g, n] of Object.entries(t.goods || {})) { this.stock[g] = Math.min(cap, (this.stock[g] || 0) + n); this.count2(this.stats.prod, g, n); }
+        for (const [g, n] of Object.entries(t.goods || {})) { const cur = this.stock[g] || 0; this.stock[g] = Math.max(cur, Math.min(cap, cur + n)); this.count2(this.stats.prod, g, n); }
         t.done = true;
       }
     }
@@ -574,8 +583,10 @@ export class Colony {
     if (!this.caravan.here) return { error: 'No caravan in town' };
     const { buy, sell } = this.prices(g);
     if (qty > 0) {
+      qty = Math.min(qty, (this.cap || 40) - (this.stock[g] || 0)); // only buy what the storage can hold
+      if (qty <= 0) return { error: `Storage for ${GOODS[g].name} is full` };
       if (this.gold < buy * qty) return { error: 'Not enough gold' };
-      this.gold -= buy * qty; this.stock[g] = Math.min(this.cap || 40, this.stock[g] + qty);
+      this.gold -= buy * qty; this.stock[g] = (this.stock[g] || 0) + qty;
     } else {
       const n = Math.min(-qty, this.stock[g]);
       if (!n) return { error: `No ${GOODS[g].name} to sell` };
@@ -709,7 +720,7 @@ export class Colony {
     const s = a => { let out = ''; for (let i = 0; i < a.length; i += 4096) out += enc(Array.from(a.subarray(i, i + 4096))); return out; };
     return JSON.stringify({
       v: 1, seed: this.seed, hero: this.hero, difficulty: this.difficulty, grant: this.grant, gold: this.gold, stock: this.stock, time: this.time, acc: this.acc,
-      history: this.history || [], histTotals: this._histTotals || null, festivalUntil: this.festivalUntil || 0, festivalReady: this.festivalReady || 0, expedition: this.expedition || null,
+      history: this.history || [], histTotals: this._histTotals || null, histT: this.histT || 0, festivalUntil: this.festivalUntil || 0, festivalReady: this.festivalReady || 0, expedition: this.expedition || null,
       relics: this.relics, questIdx: this.questIdx, won: this.won, caravan: this.caravan, peak: this.peak, unlockedSeen: this.unlockedSeen || {},
       nextId: this.nextId, nextRaidId: this.nextRaidId, raids: this.raids, trips: this.trips || [],
       tree: s(this.tree), fog: s(this.fog), road: s(this.road),
@@ -725,7 +736,7 @@ export class Colony {
     const dec = (str, arr) => { for (let i = 0; i < arr.length; i++) arr[i] = str.charCodeAt(i) - 48; };
     dec(d.tree, c.tree); dec(d.fog, c.fog); dec(d.road, c.road);
     Object.assign(c, { hero: d.hero, gold: d.gold, stock: d.stock, time: d.time, acc: d.acc, relics: d.relics, questIdx: d.questIdx, won: d.won, caravan: d.caravan,
-      history: d.history || [], _histTotals: d.histTotals || undefined, festivalUntil: d.festivalUntil || 0, festivalReady: d.festivalReady || 0, expedition: d.expedition || null,
+      history: d.history || [], _histTotals: d.histTotals || undefined, histT: d.histT || 0, festivalUntil: d.festivalUntil || 0, festivalReady: d.festivalReady || 0, expedition: d.expedition || null,
       _peak: d.peak, unlockedSeen: d.unlockedSeen, nextId: d.nextId, nextRaidId: d.nextRaidId, raids: d.raids, trips: d.trips, deposits: d.deposits, lairs: d.lairs, chests: d.chests, stats: d.stats });
     c.rand = rng(d.seed * 4099 + 77 + Math.floor(d.time));
     for (const b of d.buildings) { c.buildings.set(b.id, b); for (let j = 0; j < b.h; j++) for (let i = 0; i < b.w; i++) c.occ[idx(b.x + i, b.y + j)] = b.id; }

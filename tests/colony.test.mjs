@@ -161,6 +161,34 @@ const fresh = (seed = 3) => { const c = new Colony({ seed }); return { c, bot: n
   console.log('ok caravan trade');
 }
 
+{ // storage over the cap is never destroyed; caravans only sell what fits; refunds and repairs count upgrades
+  const { c, bot } = fresh();
+  bot.place('tradepost'); c.step(1);
+  for (let t = 0; t < 600 && !c.caravan.here; t += 5) c.step(5);
+  const cap = c.cap;
+  c.stock.planks = cap + 15; c.gold += 1000;
+  const g0 = c.gold;
+  assert.match(c.trade('planks', 5).error || '', /full/, 'no buying into a full store');
+  assert.equal(c.gold, g0, 'no gold taken for goods that would not fit');
+  assert.equal(c.stock.planks, cap + 15, 'stock above the cap kept');
+  c.stock.bricks = cap - 2; assert.ok(!c.trade('bricks', 5).error); assert.equal(c.stock.bricks, cap, 'buys only the 2 that fit');
+  // a carrier delivery into an over-full store keeps what is there
+  c.stock.logs = cap + 9; const lj = bot.place('lumberjack', undefined, undefined, (x, y) => bot.treesNear(x, y));
+  for (let i = 0; i < 400; i++) c.step(1);
+  assert.ok(c.stock.logs >= cap + 9 - 1, `logs kept above the cap (${c.stock.logs})`); void lj;
+  // paved road refunds its brick
+  c.gold += 100; c.stock.bricks = 5;
+  const k = [...c.road].findIndex(v => v === 1), x = k % W, y = (k / W) | 0;
+  assert.ok(!c.buildRoad(x, y, true).error); assert.equal(c.road[k], 2); const b0 = c.stock.bricks;
+  assert.ok(c.demolish(x, y).road); assert.equal(c.stock.bricks, b0 + 1, 'paved tile refunds 1 brick');
+  // a ruined manor costs half of hut + both upgrades to rebuild
+  const h = bot.place('hut'); h.tier = 2; h.type = 'manor'; h.ruined = true;
+  const v = c.valueOf('manor'), want = {}; for (const [g, n] of Object.entries(v)) want[g] = Math.ceil(n / 2);
+  assert.deepEqual(v, { gold: 10, planks: 9, bricks: 8, tools: 2 }, 'manor value = hut + both upgrades');
+  assert.deepEqual(c.repairCost(h), want, 'rebuild cost from the full value');
+  console.log('ok storage cap kept, caravan buys only what fits, paved refund, manor rebuild cost');
+}
+
 { // difficulty and the founding grant
   const e = new Colony({ seed: 3, difficulty: 'easy' }), h = new Colony({ seed: 3, difficulty: 'hard' });
   assert.equal(e.gold, DIFFICULTY.easy.gold); assert.equal(h.gold, DIFFICULTY.hard.gold);

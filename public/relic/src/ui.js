@@ -47,24 +47,27 @@ export class UI {
   constructor(game) {
     this.g = game; this.cat = 'production'; this.feedItems = [];
     this.minimapBase = null; this.tipEl = $('tip');
+    this.ac = new AbortController(); // a new UI is made per game: its window/document listeners go with it
+    const opt = { signal: this.ac.signal };
     $('q-min').onclick = () => $('quest').classList.toggle('min');
     document.querySelectorAll('#speed button').forEach(b => { b.onclick = () => game.setSpeed(+b.dataset.s); });
-    this.bindTips();
+    this.bindTips(opt);
     const mm = $('minimap');
     const jump = e => { const r = mm.getBoundingClientRect(); game.focusTile((e.clientX - r.left) / r.width * W, (e.clientY - r.top) / r.height * H); };
-    mm.addEventListener('pointerdown', e => { jump(e); mm.onpointermove = jump; });
-    addEventListener('pointerup', () => { mm.onpointermove = null; });
+    mm.addEventListener('pointerdown', e => { jump(e); mm.onpointermove = jump; }, opt);
+    addEventListener('pointerup', () => { mm.onpointermove = null; }, opt);
   }
+  dispose() { this.ac.abort(); }
 
   get c() { return this.g.colony; }
 
   // ------------------------------------------------------------------ tooltips
-  bindTips() {
+  bindTips(opt) {
     document.addEventListener('pointermove', e => {
       const el = e.target.closest?.('[data-tip]');
       if (!el) { if (this.tipOwner) { this.tipOwner = null; this.tip(null); } return; }
       this.tipOwner = el; this.tip(this.tipHtml(el.dataset.tip, el), e);
-    });
+    }, opt);
   }
   tip(html, e) {
     const t = this.tipEl;

@@ -64,3 +64,7 @@ input#name { font: 600 18px inherit; font-family: inherit; padding: 12px 14px; b
 .checklist { background: #ffd54a12; border: 1px solid #ffd54a55; border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; font-size: 14px; }
 .checklist h3 { margin: 0 0 6px !important; } .checklist div { padding: 2px 0; } .checklist div.done { opacity: .6; text-decoration: line-through; }
 .checklist .btn { margin-top: 8px; font-size: 12px; }
+
+.backhub { position: absolute; top: 16px; left: 16px; color: #fff; text-decoration: none; font-weight: 700; background: #0006; border: 1px solid #ffffff30; padding: 8px 14px; border-radius: 10px; z-index: 2; }
+.backhub:hover { background: #ffffff22; }
+a.btn { text-decoration: none; display: inline-flex; align-items: center; }

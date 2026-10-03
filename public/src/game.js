@@ -61,7 +61,7 @@ export class Game {
     this.yaw = 0;
     for (let i = 0; i < RELICS; i++) this.addRelic();
     for (let i = 0; i < 6; i++) this.spawnEnemy();
-    $('menu').classList.add('hidden'); $('end').classList.add('hidden'); $('hud').classList.remove('hidden');
+    $('menu').classList.add('hidden'); $('hub').classList.add('hidden'); $('end').classList.add('hidden'); $('hud').classList.remove('hidden');
     $('relicn').textContent = 0; $('killn').textContent = 0;
     this.setObjective('Find the glowing relics'); this.toast('Find the 5 relics!');
     $('c').requestPointerLock?.();
@@ -240,11 +240,16 @@ export class Game {
   }
 }
 
-export function buildMenu(onPick) {
-  const el = $('heroes');
+export function buildMenu(onPick, onStart) {
+  const el = $('heroes'), all = Object.values(HEROES);
+  const top = { hp: Math.max(...all.map(h => h.hp)), speed: Math.max(...all.map(h => h.speed)), power: Math.max(...all.map(h => h.dmg / h.cd)) };
+  const bar = (label, v) => `<div class="stat"><span>${label}</span><i><em style="width:${Math.round(v * 100)}%"></em></i></div>`;
   for (const [k, h] of Object.entries(HEROES)) {
-    const b = document.createElement('button'); b.className = 'hero';
-    b.innerHTML = `<b>${k}</b><small>${h.blurb}<br>HP ${h.hp} · ${h.ranged ? 'Ranged' : 'Melee'}</small>`;
-    b.onclick = () => onPick(k); el.appendChild(b);
+    const b = document.createElement('button'); b.className = 'hero'; b.dataset.hero = k;
+    b.innerHTML = `<div class="portrait" style="background-image:url(assets/ui/hero-${k.toLowerCase()}.webp)"><span class="role">${h.ranged ? '🏹 Ranged' : '⚔️ Melee'}</span></div>
+      <b>${k}</b><small>${h.blurb}</small>${bar('Health', h.hp / top.hp)}${bar('Speed', h.speed / top.speed)}${bar('Power', h.dmg / h.cd / top.power)}`;
+    b.onclick = () => onPick(k);
+    b.ondblclick = () => { onPick(k); onStart(); };
+    el.appendChild(b);
   }
 }

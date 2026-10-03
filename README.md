@@ -1,6 +1,6 @@
 # KayKit Forest Games
 
-Four browser games built with Three.js and free CC0 asset packs: KayKit *Adventurers 2.0*, *Forest Nature Pack 1.0* and
+A game hub and four browser games built with Three.js and free CC0 asset packs: KayKit *Adventurers 2.0*, *Forest Nature Pack 1.0* and
 *Fantasy Weapons Bits 1.0* (Kay Lousberg), plus the *Brackeys VFX bundle* (particles by Picster and Kenney, flipbooks by
 Thomas Iché, sprite sheets by CodeManu).
 
@@ -10,10 +10,15 @@ cd public && python3 -m http.server 8123   # or: npx serve public
 
 | URL | Game |
 |---|---|
+| http://localhost:8123/ | **Game hub**: the start screen, with a tile for each game (arrow keys + Enter work) |
 | http://localhost:8123/chess/ | **Wizard's Chess**, a living 3D chess set where pieces fight to capture (vs AI, two players, AI vs AI) |
 | http://localhost:8123/arena/ | **Wildwood Arena: Clash of Guilds**, an online build-and-raid tactics game (Supabase backend, offline demo built in) |
-| http://localhost:8123/tactics/ | **Wildwood Tactics**, a turn-based tactics roguelite |
-| http://localhost:8123/ | **Forest Relic Hunt**, a third-person action game (`?hero=Mage` skips the menu) |
+| http://localhost:8123/tactics/ | **Wildwood Tactics**, turn-based squad battles: roguelite campaign, skirmish vs AI, same-screen 2 players, online duels |
+| http://localhost:8123/#relic | **Forest Relic Hunt**, a third-person action game (`?hero=Mage` skips the menu) |
+
+The hub art in `public/assets/ui/` (hero portraits and game thumbnails) is rendered from the games themselves with
+`node scripts/make-thumbs.mjs` (needs Playwright and a server on port 8123). The menu font is Lilita One (SIL OFL,
+`public/assets/fonts/`).
 
 ## Wizard's Chess (`public/chess/`)
 Full-rules chess on a cracked stone board in a torch-lit hall.
@@ -116,6 +121,7 @@ The browser never writes to the database. Every action goes to the `arena` Edge 
 Run `npm test`. It covers:
 - Chess perft, rules edge cases, SAN notation and AI sanity checks (mate-in-1, legal self-play)
 - Engine replay determinism, tampered-log rejection, behaviors, consumables and the round limit
+- Versus play: two-sided turns, per-side flasks, lockstep determinism, and online duels between two in-process clients (room code, lost-message repair, a full room, rematch, quick-match pairing)
 - The arena server core: economy, validation, daily streak, harvest and craft, upgrades, raids with server replay, forged logs, PvP Elo, simulated defenses, season rollover
 - The Supabase store, against an in-memory fake of supabase-js
 - Whether `_shared` is in sync with `public/`
@@ -126,6 +132,23 @@ on a 12×12 forest grid, and travel a branching node map (skirmishes, elite squa
 boss, an elite squad called the Hollow Crown.
 
 **Turns:** each hero gets one move and one action per turn, in either order. Then the enemy squad acts.
+
+**Modes** (title screen)
+| Mode | What it is |
+|---|---|
+| Campaign | The roguelite run described below |
+| Skirmish vs AI | One battle against a random AI squad. Easy, Normal or Hard scales its HP and damage |
+| 2 Players: same screen | Hot-seat. Each player drafts a squad. Between turns a curtain hides the board and the camera turns to the next player's side |
+| Online Duel | Live duel with another browser. **Quick Match** pairs you with anyone waiting; **Create room** gives a 4-letter code (and an invite link, `?join=CODE`) for a friend |
+
+**How online duels work**
+- Supabase Realtime only: one broadcast + presence channel per room (`wwt-room-CODE`) and a lobby channel (`wwt-lobby`). No tables, no Edge Function.
+- The battle is deterministic: the same seed, squads and command list give the same game. So peers send only their commands (`move`, `ability`, `end turn`), numbered by their index in the shared log.
+- A lost message shows up as a gap. The missing entries are fetched from the other player's log, and a 4-second ping catches a lost last message.
+- Each turn has a 90-second clock that ends the turn automatically. If the opponent disconnects, they get 60 seconds to come back. Closing the tab forfeits.
+- Play is trust-based (casual). Both screens validate every command, and an illegal one is reported as a desync.
+- It uses the URL and publishable key in `public/arena/config.js`. The project's Realtime must be enabled; it is by default.
+- `?net=local` swaps in a BroadcastChannel transport so two tabs on one computer can duel, which is handy for testing. `?offline` disables online play.
 
 | Class (model) | Role | Abilities |
 |---|---|---|
@@ -163,7 +186,9 @@ boss, an elite squad called the Hollow Crown.
 - `battle.js`: turn flow, ability resolution and AI (pure, renders through an awaitable `view`, headless with `NullView`)
 - `run.js`: node map, encounters, loot, camp and save (pure)
 - `view.js`: Three.js board, units, highlights, animations and the camp scene
-- `main.js`: screens, battle input and HUD
+- `controller.js`: battle input, HUD and hints. Works for whichever side is local (`localSides`) and applies remote commands
+- `net.js`: online duels (`OnlineMatch`, Supabase / BroadcastChannel transports, room codes, quick match, gap repair)
+- `main.js`: screens, game modes and the online lobby
 
 ## Asset notes
 - The free Adventurers pack has no attack or sit animations. Attacks are procedural lunges and weapon swings layered on

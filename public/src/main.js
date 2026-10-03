@@ -13,6 +13,7 @@ tiles.querySelector('.tile')?.focus({ preventScroll: true });
 // the old hash route for the action game now goes to the colony game
 if (location.hash === '#relic') location.replace('relic/');
 else {
-  const assets = await loadAssets();
+  // the backdrop is just the orbiting forest: skip characters, weapons and animations (about 4 MB)
+  const assets = await loadAssets({ chars: [], props: [], anims: false });
   window.game = new Game(document.getElementById('c'), assets); // backdrop only (menu orbit)
 }

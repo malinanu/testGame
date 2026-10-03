@@ -1,9 +1,17 @@
 import * as THREE from 'three';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 
-/** A rigged KayKit character with animation helpers, hand slots and hit flash. */
+const sharedMats = new Map();
+/** Materials shared by `shared: true` actors (they outlive any one scene). */
+export function sharedActorMaterials() { return [...sharedMats.values()]; }
+
+/**
+ * A rigged KayKit character with animation helpers, hand slots and hit flash.
+ * `shared: true` makes every actor of the same character + tint use one material per mesh (crowds of
+ * villagers); the first hitFlash() then gives that actor its own copies.
+ */
 export class Actor {
-  constructor(assets, charName, { tint = null, scale = 1 } = {}) {
+  constructor(assets, charName, { tint = null, scale = 1, shared = false } = {}) {
     this.assets = assets;
     this.root = new THREE.Group();
     this.model = SkeletonUtils.clone(assets.chars[charName]);
@@ -12,8 +20,15 @@ export class Actor {
     this.model.traverse(o => {
       if (o.isMesh) {
         o.castShadow = true; o.frustumCulled = false;
-        o.material = o.material.clone();
-        if (tint) o.material.color.multiply(tint);
+        if (shared) {
+          const key = `${o.material.uuid}|${tint ? tint.getHex() : ''}`;
+          let m = sharedMats.get(key);
+          if (!m) { m = o.material.clone(); if (tint) m.color.multiply(tint); sharedMats.set(key, m); }
+          o.material = m;
+        } else {
+          o.material = o.material.clone();
+          if (tint) o.material.color.multiply(tint);
+        }
         this.meshes.push(o);
       }
     });
@@ -23,9 +38,10 @@ export class Actor {
     this.handL = this.model.getObjectByName('handslotl');
 
     this.mixer = new THREE.AnimationMixer(this.model);
-    this.actions = {};
-    for (const [name, clip] of Object.entries(assets.clips)) this.actions[name] = this.mixer.clipAction(clip);
-    this.cur = null; this.base = null; this.busy = 0; this.dead = false; this.flash = 0;
+    // actions are created on first use (about 26 clips exist, most actors only ever play a few)
+    const mixer = this.mixer, made = {};
+    this.actions = new Proxy(made, { get: (t, n) => typeof n !== 'string' ? undefined : (t[n] ||= assets.clips[n] ? mixer.clipAction(assets.clips[n]) : undefined) });
+    this.cur = null; this.base = null; this.busy = 0; this.dead = false; this.flash = 0; this.lit = 0; this.sharedMats = shared;
   }
 
   /** Attach a prop (weapon/shield) to a hand slot. */
@@ -58,14 +74,17 @@ export class Actor {
     return this.busy;
   }
 
-  hitFlash() { this.flash = 0.18; }
+  hitFlash() {
+    if (this.sharedMats) { this.sharedMats = false; for (const m of this.meshes) m.material = m.material.clone(); }
+    this.flash = 0.18;
+  }
 
   update(dt) {
     this.mixer.update(dt);
     if (this.busy > 0) this.busy -= dt;
     this.flash = Math.max(0, this.flash - dt);
     const e = this.flash > 0 ? 0.9 : 0;
-    for (const m of this.meshes) m.material.emissive.setRGB(e, e * 0.15, e * 0.15);
+    if (e !== this.lit) { this.lit = e; for (const m of this.meshes) m.material.emissive.setRGB(e, e * 0.15, e * 0.15); }
   }
 }
 

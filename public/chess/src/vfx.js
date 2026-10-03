@@ -15,6 +15,7 @@ export class VFX {
   constructor(scene, base = '../assets/vfx/') {
     this.scene = scene; this.base = base; this.loader = new THREE.TextureLoader();
     this.tex = {}; this.live = []; this.speed = 1;
+    this.pool = []; this.particles = 0; this.maxParticles = Infinity; // sprites are recycled, never re-created
     this.shakeT = 0; this.shakeAmp = 0;
   }
 
@@ -63,10 +64,13 @@ export class VFX {
   /** Burst of textured particles. */
   burst(pos, { count = 12, tex = 'spark_01_a', color = 0xffffff, speed = 3, life = 0.8, size = 0.4, gravity = -4, additive = true, spread = 1, up = 1, drag = 0.9 } = {}) {
     const map = this.texture(tex);
+    count = Math.min(count, this.maxParticles - this.particles);
     for (let i = 0; i < count; i++) {
-      const m = new THREE.SpriteMaterial({ map, color, transparent: true, depthWrite: false, blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending, rotation: Math.random() * 6.28 });
-      const s = new THREE.Sprite(m);
-      s.position.copy(pos);
+      const s = this.pool.pop() || new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthWrite: false }));
+      const m = s.material;
+      m.map = map; m.color.set(color); m.opacity = 1; m.rotation = Math.random() * 6.28;
+      m.blending = additive ? THREE.AdditiveBlending : THREE.NormalBlending;
+      s.position.copy(pos); this.particles++;
       const a = Math.random() * Math.PI * 2, e = Math.random() * spread;
       const v = new THREE.Vector3(Math.cos(a) * e, up * (0.4 + Math.random()), Math.sin(a) * e).normalize().multiplyScalar(speed * (0.4 + Math.random() * 0.8));
       const sz = size * (0.6 + Math.random() * 0.8);
@@ -165,13 +169,15 @@ export class VFX {
         fx.obj.children.forEach(m => { m.material.opacity *= k > 0.7 ? 0.85 : 1; });
       }
     }
-    const done = this.live.filter(fx => !fx.loop && fx.t >= fx.dur);
-    for (const fx of done) {
+    // finished effects: particles go back to the pool, everything else is disposed (swap-remove, O(n))
+    for (let i = this.live.length - 1; i >= 0; i--) {
+      const fx = this.live[i];
+      if (fx.loop || fx.t < fx.dur) continue;
       fx.obj.parent?.remove(fx.obj);
-      fx.obj.traverse?.(o => { o.geometry?.dispose?.(); o.material?.dispose?.(); });
-      fx.map?.dispose?.();
+      if (fx.kind === 'particle') { this.particles--; this.pool.push(fx.obj); }
+      else { fx.obj.traverse?.(o => { o.geometry?.dispose?.(); o.material?.dispose?.(); }); fx.map?.dispose?.(); }
+      this.live[i] = this.live[this.live.length - 1]; this.live.pop();
     }
-    if (done.length) this.live = this.live.filter(fx => !done.includes(fx));
     if (this.shakeT > 0) {
       this.shakeT -= rawDt;
       const a = this.shakeAmp * Math.max(0, this.shakeT) * 3;

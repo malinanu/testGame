@@ -35,11 +35,13 @@ export function resolve(colony, pos, radius = 0.45) {
   }
 }
 
+const SHOT = {};
+
 export class Creature {
   constructor(mode, kind, pos, assets, { home = null, raid = null, lair = null } = {}) {
     const t = this.t = CREATURES[kind];
     this.kind = kind; this.mode = mode; this.home = home ? home.clone() : pos.clone(); this.raid = raid; this.lair = lair;
-    this.actor = new Actor(assets, t.char, { tint: new THREE.Color(t.tint), scale: t.scale });
+    this.actor = new Actor(assets, t.char, { tint: new THREE.Color(t.tint), scale: t.scale, shared: true });
     this.actor.hold(t.weapon, 'R');
     this.root = this.actor.root; this.pos = this.root.position.copy(pos);
     this.hp = t.hp; this.dead = false; this.radius = t.radius; this.cd = 0; this.facing = Math.random() * 6.28;
@@ -54,8 +56,8 @@ export class Creature {
     return false;
   }
   /** hero: Hero or null (when the player is in town view creatures don't chase). */
-  update(dt, colony, hero, simTime) {
-    this.actor.update(dt);
+  update(dt, colony, hero, simTime, tick = (a, d) => a.update(d)) {
+    tick(this.actor, dt);
     if (this.dead) { this.removeT -= dt; if (this.removeT < 0.8) this.pos.y -= dt * 0.8; return; }
     this.spawnT -= dt; this.cd -= dt;
     if (this.knock.lengthSq() > 0.01) { this.pos.addScaledVector(this.knock, dt); this.knock.multiplyScalar(Math.max(0, 1 - dt * 9)); }
@@ -231,9 +233,10 @@ export class Adventure {
     }
   }
   shoot(pos, dir, kind, dmg) {
-    const mesh = kind === 'orb'
-      ? new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 8), new THREE.MeshBasicMaterial({ color: 0x9be7ff }))
-      : new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.9, 5).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffe0a0 }));
+    const P = SHOT[kind === 'orb' ? 'orb' : 'arrow'] ||= kind === 'orb'
+      ? { geo: new THREE.SphereGeometry(0.22, 10, 8), mat: new THREE.MeshBasicMaterial({ color: 0x9be7ff }) }
+      : { geo: new THREE.CylinderGeometry(0.04, 0.04, 0.9, 5).rotateX(Math.PI / 2), mat: new THREE.MeshBasicMaterial({ color: 0xffe0a0 }) };
+    const mesh = new THREE.Mesh(P.geo, P.mat); // shared geometry + material: nothing to dispose per shot
     mesh.position.copy(pos); mesh.lookAt(pos.clone().add(dir));
     this.g.scene.add(mesh);
     this.projectiles.push({ mesh, dir: dir.clone(), speed: kind === 'orb' ? 20 : 28, life: 1.2, dmg });
@@ -298,8 +301,9 @@ export class Adventure {
     if (h.alive && tx >= 0 && ty >= 0 && tx < W && ty < H && this.c.owned[idx(tx, ty)]) h.hp = Math.min(h.maxHp, h.hp + dt * 6);
     if ((this.revealT -= dt) <= 0) { this.revealT = 0.4; if (active && tx >= 0 && ty >= 0 && tx < W && ty < H) this.c.heroAt(tx + 0.5, ty + 0.5); this.syncGuards(); }
     const simTime = this.c.time;
+    const u = this.g.units, tick = u?.frustum ? (a, d) => u.tick(a, d) : undefined;
     for (const k of this.creatures) {
-      k.update(dt, this.c, active ? h : null, simTime);
+      k.update(dt, this.c, active ? h : null, simTime, tick);
       if (k.despawn != null && (k.despawn -= dt) <= 0) { k.dead = true; k.removeT = 0; }
     }
     this.creatures = this.creatures.filter(k => { if (k.dead && k.removeT <= 0) { this.g.scene.remove(k.root); return false; } return true; });

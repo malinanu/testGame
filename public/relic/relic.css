@@ -55,11 +55,12 @@ kbd { background: #0004; border: 1px solid #fff4; border-bottom-width: 2px; bord
 #hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
 #hud > * { pointer-events: auto; }
 #labels { position: fixed; inset: 0; pointer-events: none; z-index: 5; overflow: hidden; }
-.blabel { position: absolute; transform: translate(-50%, -100%); font-size: 18px; filter: drop-shadow(0 2px 2px #000); pointer-events: none; animation: bob 1.4s ease-in-out infinite; }
+.blabel { position: absolute; transform: translate(-50%, -100%); font-size: 18px; filter: drop-shadow(0 2px 2px #000); pointer-events: none; }
+.blabel > span { display: inline-block; animation: bob 1.4s ease-in-out infinite; }
 .flabel { position: absolute; transform: translate(-50%, -100%); font: 700 13px system-ui; color: #fff; background: #000a; padding: 2px 8px; border-radius: 10px; white-space: nowrap; pointer-events: none; border: 1px solid #fff3; }
 .flabel.relic { border-color: var(--gold); color: var(--gold); }
 .float { position: absolute; transform: translate(-50%, -100%); font: 800 15px system-ui; color: var(--gold); text-shadow: 0 2px 3px #000; pointer-events: none; transition: transform 1.2s ease-out, opacity 1.2s; }
-@keyframes bob { 50% { transform: translate(-50%, -115%); } }
+@keyframes bob { 50% { transform: translateY(-15%); } }
 
 #topbar { position: absolute; top: 0; left: 0; right: 0; height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 12px;
   background: linear-gradient(#5a3d24, #2d1d10); border-bottom: 3px solid var(--brass); box-shadow: 0 4px 16px #0009; }

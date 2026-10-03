@@ -31,6 +31,8 @@ function shingleTexture(base, dark, kind = 'tile') {
 }
 const matCache = {};
 export function mat(key, make) { return matCache[key] ||= make(); }
+/** Module-level resources that outlive any one game (never dispose these). */
+export function kitShared() { return [...Object.values(matCache), ...Object.values(texCache)]; }
 export const ROOFS = {
   thatch: () => mat('roof-thatch', () => new THREE.MeshStandardMaterial({ map: shingleTexture('#c9a35a', '#8a6a2a', 'thatch'), roughness: 1 })),
   red: () => mat('roof-red', () => new THREE.MeshStandardMaterial({ map: shingleTexture('#a8432f', '#6e2418'), roughness: 0.85 })),
@@ -414,6 +416,18 @@ export class Kit {
 
   // ------------------------------------------------------------------ baking
   /** Merge all static meshes per material (keeps instanced crops and marked objects separate). */
+  /**
+   * A baked model for a building type, cached: every building of a type shares the merged geometry and
+   * materials (clone() shares them), so placing the 20th hut costs a scene-graph clone, not a re-merge.
+   */
+  model(type, { ruined = false, scaffold = false } = {}) {
+    const key = `${type}|${ruined}|${scaffold}`;
+    const t = (this.bakeCache ||= new Map()).get(key) || this.bakeCache.set(key, this.bake(scaffold ? this.scaffold(type) : this.build(type, { ruined }))).get(key);
+    const o = t.clone(true);
+    o.traverse(m => { if (m.isMesh) m.userData.shared = true; });
+    return o;
+  }
+
   bake(g) {
     g.updateMatrixWorld(true);
     const inv = new THREE.Matrix4().copy(g.matrixWorld).invert();
@@ -422,7 +436,7 @@ export class Kit {
       if (o === g) return;
       if (o.isInstancedMesh || o.userData.noBake || o.userData.smoke) { keep.push(o); return; }
       if (!o.isMesh) return;
-      const geo = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
+      const geo = o.geometry.clone();
       for (const k of Object.keys(geo.attributes)) if (!['position', 'normal', 'uv'].includes(k)) geo.deleteAttribute(k);
       if (!geo.attributes.uv) geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(geo.attributes.position.count * 2), 2));
       if (!geo.attributes.normal) geo.computeVertexNormals();
@@ -431,7 +445,8 @@ export class Kit {
     });
     const out = new THREE.Group();
     for (const [m, geos] of byMat) {
-      const merged = mergeGeometries(geos, false);
+      // keep index buffers when every piece has one (most kit pieces do): about a third of the vertices
+      const merged = mergeGeometries(geos.every(q => q.index) ? geos : geos.map(q => q.index ? q.toNonIndexed() : q), false);
       if (!merged) continue;
       const mesh = new THREE.Mesh(merged, m); mesh.castShadow = true; mesh.receiveShadow = true;
       out.add(mesh);

@@ -46,7 +46,7 @@ class ChunkedPool {
     for (let cy = 0; cy < NC; cy++) for (let cx = 0; cx < NC; cx++) {
       const p = new Pool(scene, mesh, CH * CH, { shadow }), i = p.inst;
       const [x0, z0] = tileToWorld(cx * CH, cy * CH), [x1, z1] = tileToWorld(cx * CH + CH - 1, cy * CH + CH - 1);
-      i.frustumCulled = true; i.visible = false;
+      i.frustumCulled = true; i.visible = false; i.matrixAutoUpdate = false; // chunks never move
       i.boundingSphere = new THREE.Sphere(new THREE.Vector3((x0 + x1) / 2, 4, (z0 + z1) / 2), Math.hypot(x1 - x0, z1 - z0) / 2 + 12);
       p.center = i.boundingSphere.center; p.shadow = shadow;
       this.chunks.push(p);
@@ -225,25 +225,34 @@ export class World3D {
     return this[key] = new THREE.MeshStandardMaterial({ map: t, roughness: paved ? 0.8 : 1, polygonOffset: true, polygonOffsetFactor: paved ? -3 : -2 });
   }
   rebuildRoads() {
+    for (const o of this.roads.children) o.dispose(); // instance buffers; geometry and materials are shared
     this.roads.clear();
+    const G = this.roadGeo ||= { c: new THREE.PlaneGeometry(1.5, 1.5).rotateX(-Math.PI / 2), l: new THREE.PlaneGeometry(1.5, 1.1).rotateX(-Math.PI / 2) };
+    const road = this.c.road, m = new THREE.Matrix4(), rot = new THREE.Matrix4().makeRotationY(Math.PI / 2);
     for (const paved of [false, true]) {
-      const lvl = paved ? 2 : 1, tiles = []; for (let i = 0; i < W * H; i++) if (this.c.road[i] === lvl) tiles.push(i);
+      const lvl = paved ? 2 : 1, tiles = []; for (let i = 0; i < W * H; i++) if (road[i] === lvl) tiles.push(i);
       if (!tiles.length) continue;
-      const centers = new THREE.InstancedMesh(new THREE.PlaneGeometry(1.5, 1.5).rotateX(-Math.PI / 2), this.roadMaterial(paved), tiles.length);
-      const links = new THREE.InstancedMesh(new THREE.PlaneGeometry(1.5, 1.1).rotateX(-Math.PI / 2), this.roadMaterial(paved), tiles.length * 2);
-      const m = new THREE.Matrix4(), y0 = paved ? 0.05 : 0.04; let n = 0;
+      const centers = new THREE.InstancedMesh(G.c, this.roadMaterial(paved), tiles.length);
+      const links = new THREE.InstancedMesh(G.l, this.roadMaterial(paved), tiles.length * 4);
+      const y0 = paved ? 0.05 : 0.04; let n = 0;
+      const across = (wx, wz) => links.setMatrixAt(n++, m.copy(rot).setPosition(wx, y0 - 0.005, wz));
+      const down = (wx, wz) => links.setMatrixAt(n++, m.makeTranslation(wx, y0 - 0.005, wz));
       tiles.forEach((k, i) => {
         const x = k % W, y = (k / W) | 0, [wx, wz] = tileToWorld(x, y);
         centers.setMatrixAt(i, m.makeTranslation(wx, y0, wz));
-        // link to any road neighbour; a paved link only between two paved tiles
-        if (x + 1 < W && this.c.road[k + 1] >= lvl) links.setMatrixAt(n++, new THREE.Matrix4().makeRotationY(Math.PI / 2).setPosition(wx + 1, y0 - 0.005, wz));
-        if (y + 1 < H && this.c.road[k + W] >= lvl) links.setMatrixAt(n++, m.makeTranslation(wx, y0 - 0.005, wz + 1));
+        // a paved link joins two paved tiles; every other road pair gets a dirt link, whichever side it is on
+        if (x + 1 < W && road[k + 1] >= lvl) across(wx + 1, wz);
+        if (y + 1 < H && road[k + W] >= lvl) down(wx, wz + 1);
+        if (!paved && x > 0 && road[k - 1] === 2) across(wx - 1, wz);
+        if (!paved && y > 0 && road[k - W] === 2) down(wx, wz - 1);
       });
       links.count = n;
       centers.receiveShadow = links.receiveShadow = true;
+      centers.matrixAutoUpdate = links.matrixAutoUpdate = false;
       this.roads.add(centers, links);
     }
   }
+
 
   // ------------------------------------------------------------------ fog of war + territory overlay
   buildOverlay() {
@@ -265,14 +274,17 @@ export class World3D {
   fog(x, y) { return this.c.fog[idx(x, y)] === 1; }
   applyFog() {
     const d = this.ovData, md = this.mistData, c = this.c;
+    let ov = 0, mist = 0;
     for (let i = 0; i < W * H; i++) {
       const o = i * 4;
       md[o] = 205; md[o + 1] = 218; md[o + 2] = 222; md[o + 3] = c.fog[i] ? 0 : 255;
-      if (!c.fog[i]) { d[o] = 52; d[o + 1] = 66; d[o + 2] = 78; d[o + 3] = 235; }
-      else if (this.showTerritory && !c.owned[i]) { d[o] = 150; d[o + 1] = 50; d[o + 2] = 40; d[o + 3] = 70; }
+      if (!c.fog[i]) { d[o] = 52; d[o + 1] = 66; d[o + 2] = 78; d[o + 3] = 235; ov++; mist++; }
+      else if (this.showTerritory && !c.owned[i]) { d[o] = 150; d[o + 1] = 50; d[o + 2] = 40; d[o + 3] = 70; ov++; }
       else d[o + 3] = 0;
     }
     this.ovTex.needsUpdate = true; this.mistTex.needsUpdate = true;
+    // two map-sized transparent planes are pure fill-rate cost once there is nothing on them
+    this.overlay.visible = ov > 0; this.mist.visible = mist > 0;
     this.syncFeatures();
   }
   setTerritoryVisible(on) { if (this.showTerritory !== on) { this.showTerritory = on; this.applyFog(); } }
@@ -353,7 +365,7 @@ export class World3D {
   // ------------------------------------------------------------------ buildings
   addBuilding(b, animate = true) {
     const old = this.buildingObjs.get(b.id); if (old) this.root.remove(old.obj);
-    const model = this.kit.bake(this.kit.build(b.type, { ruined: b.ruined }));
+    const model = this.kit.model(b.type, { ruined: !!b.ruined });
     const [wx, wz] = tileToWorld(b.x + b.w / 2 - 0.5, b.y + b.h / 2 - 0.5);
     model.position.set(wx, 0, wz);
     // face the nearest road
@@ -366,7 +378,7 @@ export class World3D {
     this.buildingObjs.set(b.id, { obj: model, smokes });
     if (animate === 'construct') {
       // scaffold first, then the building rises out of it
-      const scaf = this.kit.bake(this.kit.scaffold(b.type)); scaf.position.copy(model.position); scaf.rotation.y = model.rotation.y; this.root.add(scaf);
+      const scaf = this.kit.model(b.type, { scaffold: true }); scaf.position.copy(model.position); scaf.rotation.y = model.rotation.y; this.root.add(scaf);
       model.scale.set(1, 0.01, 1); model.visible = false;
       this.anims.push({ t: 0, dur: CONSTRUCT_TIME + 0.9, fn: k => {
         const t = k * (CONSTRUCT_TIME + 0.9) - CONSTRUCT_TIME;

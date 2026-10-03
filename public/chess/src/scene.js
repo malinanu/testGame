@@ -70,11 +70,14 @@ function labelTexture(text) {
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
 }
 
+// phones and 4-core machines: lower pixel ratio, smaller shadow map, no per-torch point lights
+const LOW_END = matchMedia('(pointer: coarse)').matches || (navigator.hardwareConcurrency || 8) <= 4;
+
 export class ChessScene {
   constructor(canvas, assets, sfx) {
     this.assets = assets; this.sfx = sfx; this.speed = 1; this.cinematic = true;
-    const r = this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    r.setPixelRatio(Math.min(devicePixelRatio, 2));
+    const r = this.renderer = new THREE.WebGLRenderer({ canvas, antialias: !LOW_END, powerPreference: 'high-performance' });
+    r.setPixelRatio(Math.min(devicePixelRatio, LOW_END ? 1.25 : 1.5));
     r.shadowMap.enabled = true; r.shadowMap.type = THREE.PCFSoftShadowMap;
     r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 1.15;
     this.scene = new THREE.Scene();
@@ -101,9 +104,9 @@ export class ChessScene {
 
   // ---------------------------------------------------------------- environment
   lights() {
-    this.scene.add(new THREE.HemisphereLight(0x8a98d0, 0x2a2018, 0.45));
+    this.scene.add(new THREE.HemisphereLight(0x8a98d0, 0x2a2018, LOW_END ? 0.7 : 0.55));
     const key = this.key = new THREE.DirectionalLight(0xffe8c8, 2.1);
-    key.position.set(8, 34, -14); key.castShadow = true; key.shadow.mapSize.set(2048, 2048);
+    key.position.set(8, 34, -14); key.castShadow = true; key.shadow.mapSize.setScalar(LOW_END ? 1024 : 2048);
     Object.assign(key.shadow.camera, { left: -16, right: 16, top: 16, bottom: -16, near: 1, far: 80 });
     key.shadow.bias = -0.0004;
     this.scene.add(key, key.target);
@@ -136,7 +139,10 @@ export class ChessScene {
         const holder = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.24, 1.3, 8), new THREE.MeshStandardMaterial({ color: 0x3b2a1a, roughness: 0.8 }));
         holder.position.copy(p).setY(6.8); sc.add(holder);
         const fire = this.vfx.sheet('fire_8x8', p.clone().setY(8.0), { size: 2.2, loop: true, duration: 1.6, additive: true });
-        const light = new THREE.PointLight(0xff8a3a, 70, 34, 2); light.position.copy(p).setY(8.2); sc.add(light);
+        // every point light is evaluated by every lit pixel: only two torches (opposite sides) get a real
+        // light, brighter to compensate; the rest are just their fire sprites. None on low-end devices.
+        let light = null;
+        if (!LOW_END && (i === 0 || i === 6)) { light = new THREE.PointLight(0xff8a3a, 110, 46, 2); light.position.copy(p).setY(8.2); sc.add(light); }
         this.torches.push({ light, fire, ph: Math.random() * 10 });
       }
     }
@@ -626,7 +632,7 @@ export class ChessScene {
       if (pc) pc.actor.once(['Idle_B', 'Interact', 'Idle_A'][Math.floor(Math.random() * 3)], { speed: 1 });
     }
     for (const pc of this.pieces.values()) if (pc.actor && pc.actor.busy <= 0 && !pc.actor.base && !pc.actor.dead) pc.actor.setBase('Idle_A');
-    for (const t of this.torches) t.light.intensity = 60 + Math.sin(time * 13 + t.ph) * 10 + Math.sin(time * 7.3 + t.ph * 2) * 8;
+    for (const t of this.torches) if (t.light) t.light.intensity = 100 + Math.sin(time * 13 + t.ph) * 14 + Math.sin(time * 7.3 + t.ph * 2) * 10;
     for (const f of this.fog) { f.a += f.sp * dt; f.s.position.x = Math.cos(f.a) * f.R; f.s.position.z = Math.sin(f.a) * f.R; f.s.material.rotation += dt * 0.03; }
     for (const m of this.motes) { m.s.position.y += m.v * dt; m.s.position.x += Math.sin(time * 0.5 + m.ph) * dt * 0.3; if (m.s.position.y > 20) m.s.position.y = -1; }
     if (this.checkRing.visible) { const k = 1.15 + Math.sin(time * 6) * 0.12; this.checkRing.scale.setScalar(k); this.checkRing.material.opacity = 0.6 + Math.sin(time * 6) * 0.35; }

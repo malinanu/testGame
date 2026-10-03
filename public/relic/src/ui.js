@@ -14,23 +14,32 @@ const fmt = n => Math.abs(n) >= 10000 ? (n / 1000).toFixed(0) + 'k' : Math.round
 const SHOWN_GOODS = ['logs', 'planks', 'stone', 'bricks', 'food', 'grain', 'bread', 'flax', 'textiles', 'ale', 'charcoal', 'ore', 'iron', 'tools', 'goldore', 'jewelry', 'maps'];
 
 /** Render a small preview image of every building type. */
-export function renderThumbs(kit) {
-  const size = 152, r = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
-  r.setSize(size, size * 0.76); r.outputColorSpace = THREE.SRGBColorSpace; r.toneMapping = THREE.ACESFilmicToneMapping;
+/**
+ * Building thumbnails for the build menu, rendered once with the game's own renderer (a second WebGL
+ * context would compile every shader again): each model is drawn into the corner of the main canvas and
+ * copied out in the same task, before the browser can clear the drawing buffer.
+ */
+export function renderThumbs(kit, r) {
+  const size = 152, h = Math.round(size * 0.76), pr = r.getPixelRatio();
+  const cv = document.createElement('canvas'); cv.width = size; cv.height = h; const ctx = cv.getContext('2d');
   const scene = new THREE.Scene(); scene.background = new THREE.Color(0x8ab878);
   scene.add(new THREE.HemisphereLight(0xffffff, 0x4a6a3a, 1.6));
   const sun = new THREE.DirectionalLight(0xfff1d0, 2.4); sun.position.set(5, 9, 7); scene.add(sun);
-  const cam = new THREE.PerspectiveCamera(30, 1 / 0.76, 0.1, 200), out = {};
+  const cam = new THREE.PerspectiveCamera(30, size / h, 0.1, 200), out = {};
+  const vp = r.getViewport(new THREE.Vector4());
+  r.setViewport(0, 0, size, h); r.setScissor(0, 0, size, h); r.setScissorTest(true);
   for (const type of Object.keys(BUILDINGS)) {
     if (type === 'road') continue;
-    const g = kit.build(type); scene.add(g);
+    const g = kit.model(type); scene.add(g); // also warms the bake cache the world uses
     const box = new THREE.Box3().setFromObject(g), sz = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
     const d = Math.max(sz.x, sz.y * 1.2, sz.z) * 1.9;
     cam.position.set(c.x + d * 0.6, c.y + d * 0.55, c.z + d * 0.75); cam.lookAt(c.x, c.y * 0.8, c.z);
-    r.render(scene, cam); out[type] = r.domElement.toDataURL('image/webp', 0.8);
+    r.render(scene, cam);
+    ctx.drawImage(r.domElement, 0, r.domElement.height - h * pr, size * pr, h * pr, 0, 0, size, h);
+    out[type] = cv.toDataURL('image/webp', 0.8);
     scene.remove(g);
   }
-  r.dispose();
+  r.setScissorTest(false); r.setViewport(vp);
   return out;
 }
 
@@ -115,15 +124,21 @@ export class UI {
   // ------------------------------------------------------------------ build menu
   renderBuild() {
     const c = this.c, g = this.g;
-    $('cats').innerHTML = CATEGORIES.filter(k => k.id !== 'roads').map(k => `<button data-cat="${k.id}" class="${this.cat === k.id ? 'on' : ''}">${k.icon} ${k.name}</button>`).join('');
-    $('cats').querySelectorAll('button').forEach(b => { b.onclick = () => { this.cat = b.dataset.cat; this.renderBuild(); }; });
+    // rebuilt only when something visible changed (the thumbnails are big data: URLs to re-decode)
+    const cats = CATEGORIES.filter(k => k.id !== 'roads').map(k => `<button data-cat="${k.id}" class="${this.cat === k.id ? 'on' : ''}">${k.icon} ${k.name}</button>`).join('');
+    if (cats !== this.catsHtml) {
+      this.catsHtml = cats; $('cats').innerHTML = cats;
+      $('cats').querySelectorAll('button').forEach(b => { b.onclick = () => { this.cat = b.dataset.cat; this.renderBuild(); }; });
+    }
     const types = Object.keys(BUILDINGS).filter(t => BUILDINGS[t].cat === this.cat && BUILDINGS[t].buildable !== false);
-    $('cards').innerHTML = types.map(t => {
+    const cards = types.map(t => {
       const d = BUILDINGS[t], locked = (d.tier && !c.tierUnlocked(d.tier)) || (d.relics && c.relics.length < d.relics);
       const poor = !c.affordable(d.cost || {});
       return `<div class="bcard ${locked ? 'locked' : ''} ${poor ? 'poor' : ''} ${g.mode === 'build' && g.buildType === t ? 'on' : ''}" data-type="${t}" data-tip="b:${t}">
         ${locked ? '<span class="lk">🔒</span>' : ''}<img src="${g.thumbs[t] || ''}" alt=""><b>${d.name}</b><div class="cost">${costHtml(d.cost || {}, c)}</div></div>`;
     }).join('');
+    if (cards === this.cardsHtml) return;
+    this.cardsHtml = cards; $('cards').innerHTML = cards;
     $('cards').querySelectorAll('.bcard').forEach(el => { el.onclick = () => g.startBuild(el.dataset.type); });
   }
 
@@ -131,7 +146,7 @@ export class UI {
   renderInspector() {
     const g = this.g, c = this.c, box = $('inspector');
     const sel = g.selected;
-    if (!sel) { box.classList.add('hidden'); return; }
+    if (!sel) { box.classList.add('hidden'); this.inspHtml = ''; return; }
     box.classList.remove('hidden');
     let h = '';
     if (sel.kind === 'building') {
@@ -154,16 +169,20 @@ export class UI {
       if (b.type !== 'townhall' && b.type !== 'sanctum') h += `<button class="btn bad" data-act="demolish">💥 Demolish</button>`;
       h += `</div>`;
     } else if (sel.kind === 'lair') {
-      const l = c.lairs.find(q => q.id === sel.id), k = LAIR_KINDS[l.kind];
+      const l = c.lairs.find(q => q.id === sel.id);
+      if (!l) { g.selected = null; box.classList.add('hidden'); return; }
+      const k = LAIR_KINDS[l.kind];
       h += `<h3>${l.relic && !l.relicTaken ? '💎' : '☠️'} ${k.name}<button data-act="close">✕</button></h3>`;
       h += l.cleared ? `<div class="status ok">Cleared.${l.relic && !l.relicTaken ? ' The relic waits for your Founder to pick it up.' : ''}</div>` : `<div class="status warn">Guarded by ${k.guards.length} creatures. Only your Founder can clear it.</div>`;
       if (l.relic) { const r = RELICS.find(q => q.id === l.relic); h += `<p class="desc"><b>${r.icon} ${r.name}</b>: ${r.boon}</p>`; }
       h += `<p class="desc">Loot: ${c.lootText(k.loot)}</p><div class="ibtns"><button class="btn good" data-act="hero">⚔️ Send the Founder (H)</button></div>`;
     } else if (sel.kind === 'deposit') {
       const d = c.deposits.find(q => q.id === sel.id);
+      if (!d) { g.selected = null; box.classList.add('hidden'); return; }
       h += `<h3>${d.kind === 'iron' ? '⛏️ Iron' : '🟡 Gold'} deposit<button data-act="close">✕</button></h3><p class="desc">Build ${d.kind === 'iron' ? 'an Iron Mine' : 'a Gold Mine'} exactly on it. It must be inside your territory: build an Outpost nearby if it is not.</p>`;
     }
-    box.innerHTML = h;
+    if (h === this.inspHtml) return; // unchanged: keep the DOM (and a button mid-click) as it is
+    this.inspHtml = h; box.innerHTML = h;
     box.querySelectorAll('[data-act]').forEach(el => { el.onclick = () => g.inspectorAction(el.dataset.act, el.dataset); });
   }
   residenceHtml(b) {

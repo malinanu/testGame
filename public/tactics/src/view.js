@@ -27,7 +27,8 @@ export class View {
   constructor(canvas, assets) {
     this.assets = assets;
     const r = this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    r.setPixelRatio(Math.min(devicePixelRatio, 2));
+    const lowEnd = matchMedia('(pointer: coarse)').matches || (navigator.hardwareConcurrency || 8) <= 4;
+    r.setPixelRatio(Math.min(devicePixelRatio, lowEnd ? 1.25 : 1.5));
     r.shadowMap.enabled = true; r.shadowMap.type = THREE.PCFSoftShadowMap;
     r.toneMapping = THREE.ACESFilmicToneMapping;
     this.scene = new THREE.Scene();
@@ -42,7 +43,7 @@ export class View {
     this.hemi = new THREE.HemisphereLight(0xdff6ff, 0x3f5a35, 1.1);
     this.sun = new THREE.DirectionalLight(0xfff1d0, 2.4);
     this.sun.position.set(18, 34, -12); this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(2048, 2048);
+    this.sun.shadow.mapSize.setScalar(lowEnd ? 1024 : 2048);
     Object.assign(this.sun.shadow.camera, { left: -22, right: 22, top: 22, bottom: -22, near: 1, far: 90 });
     this.sun.shadow.bias = -0.0005;
     this.scene.add(this.hemi, this.sun);
@@ -568,7 +569,7 @@ export class View {
         new THREE.MeshBasicMaterial({ color: k % 2 ? 0xffc040 : 0xff6a1a, transparent: true, opacity: 0.9 }));
       f.position.set(Math.cos(k * 1.3) * 0.2, 0.55, Math.sin(k * 1.3) * 0.2); f.userData.ph = k; c.add(f); this.campFlames.push(f);
     }
-    this.campLight = new THREE.PointLight(0xff9a40, 60, 22, 1.6); this.campLight.position.y = 1.2; this.campLight.castShadow = true;
+    this.campLight = new THREE.PointLight(0xff9a40, 60, 22, 1.6); this.campLight.position.y = 1.2; // no shadow: a point-light shadow re-renders the scene 6 more times
     c.add(this.campLight);
     const seats = Math.max(heroes.length, 4);
     heroes.forEach((h, i) => {

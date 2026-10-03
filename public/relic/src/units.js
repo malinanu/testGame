@@ -23,11 +23,11 @@ export class Units {
     let a = this.pool.pop();
     if (!a) {
       const [ch, tint] = LOOKS[this.n++ % LOOKS.length];
-      a = new Actor(this.g.assets, ch, { tint: tint === 0xffffff ? null : new THREE.Color(tint), scale: 0.8 });
+      a = new Actor(this.g.assets, ch, { tint: tint === 0xffffff ? null : new THREE.Color(tint), scale: 0.8, shared: true });
       a.load = new THREE.Group(); a.load.position.y = 1.75; a.root.add(a.load);
       a.tools = [];
     }
-    a.root.visible = true; a.root.scale.setScalar(1); this.g.scene.add(a.root);
+    a.root.visible = true; a.root.scale.setScalar(1); a.acc = 0; this.g.scene.add(a.root);
     return a;
   }
   /** Put a tool in the right hand (a kit piece). */
@@ -58,6 +58,21 @@ export class Units {
     if (dir.lengthSq() > 1e-6) w.facing = turnToward(w.facing, Math.atan2(dir.x, dir.z), dt * 10);
     w.a.root.rotation.y = w.facing;
   }
+  /**
+   * Advance an actor's animation, but cheaply when nobody can see it: actors outside the view frustum or
+   * far from the camera are hidden and their mixer runs at 4 Hz (timers still add up), and only actors
+   * near the view centre cast shadows.
+   */
+  tick(a, adt) {
+    const p = a.root.position, t = this.g.cam.target, d = Math.hypot(p.x - t.x, p.z - t.z);
+    this.sphere.center.set(p.x, p.y + 1, p.z);
+    const vis = d < this.far && this.frustum.intersectsSphere(this.sphere);
+    a.root.visible = vis;
+    const shadow = vis && d < this.shadowR;
+    if (a.shadow !== shadow) { a.shadow = shadow; for (const m of a.meshes) m.castShadow = shadow; }
+    a.acc = (a.acc || 0) + adt;
+    if (vis || a.acc > 0.25) { a.update(a.acc); a.acc = 0; }
+  }
   nearCamera(p, r = 90) { const t = this.g.cam.target; return Math.hypot(p.x - t.x, p.z - t.z) < r; }
 
   // ------------------------------------------------------------------ carriers
@@ -68,6 +83,9 @@ export class Units {
     if (!s || !b) return;
     const tiles = c.roadPath(s, b);
     if (!tiles || tiles.length < 2) return;
+    // carriers far from the view are not worth an actor (the sim moves the goods either way)
+    const mid = tiles[tiles.length >> 1];
+    if (!this.nearCamera(this.worldPt(mid[0], mid[1]), 110)) return;
     const a = this.actor(), path = this.pathPoints(tiles);
     a.root.position.copy(path.pts[0]);
     this.walkers.push({ a, ...path, trip, good: trip.good && GOODS[trip.good], loaded: false, facing: 0, side: (Math.random() - 0.5) * 0.6 });
@@ -131,7 +149,10 @@ export class Units {
 
   // ------------------------------------------------------------------ frame update
   update(dt) {
-    const c = this.c, t = c.time + c.acc, sp = this.g.speed, adt = dt * (sp || 0);
+    const c = this.c, t = c.time + c.acc, sp = this.g.speed, adt = dt * (sp || 0), cam = this.g.camera;
+    this.frustum ||= new THREE.Frustum(); this.sphere ||= new THREE.Sphere(new THREE.Vector3(), 2.2); this.pm ||= new THREE.Matrix4();
+    this.frustum.setFromProjectionMatrix(this.pm.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+    const q = this.g.quality; this.far = q === 'low' ? 90 : 130; this.shadowR = q === 'low' ? 0 : q === 'medium' ? 35 : 60;
     // carriers follow the sim's trip timing exactly
     for (const w of this.walkers) {
       const tr = w.trip, out = t < tr.pick;
@@ -144,7 +165,7 @@ export class Units {
         if (w.good) { const piece = this.g.world.kit.piece(w.good.carry); piece.scale.setScalar(0.45); w.a.load.add(piece); }
         w.a.once('PickUp', { speed: 2.5 });
       }
-      w.a.setBase('Walking_A'); w.a.update(adt);
+      w.a.setBase('Walking_A'); this.tick(w.a, adt);
       w.done = t >= tr.end || !c.buildings.get(tr.to);
     }
     this.walkers = this.walkers.filter(w => { if (w.done) { this.release(w.a); return false; } return true; });
@@ -171,7 +192,7 @@ export class Units {
       const { p, dir } = this.at(s, Math.max(0, Math.min(s.total, s.d)));
       if (s.dir < 0) dir.negate();
       this.place(s, p, s.wait > 0 ? new THREE.Vector3() : dir, dt);
-      s.a.update(adt);
+      this.tick(s.a, adt);
     }
     this.strollers = this.strollers.filter(s => { if (s.done) { this.release(s.a); return false; } return true; });
 
@@ -199,7 +220,7 @@ export class Units {
         if (a.busy <= 0 && j.t < j.dur) { a.once('Use_Item', { speed: 2 }); this.g.ambience?.hammer(a.root.position); }
         if (j.t >= j.dur) j.done = true;
       }
-      a.update(adt);
+      this.tick(a, adt);
     }
     this.jobs = this.jobs.filter(j => { if (j.done) { this.release(j.a); return false; } return true; });
 
@@ -216,7 +237,7 @@ export class Units {
         w.a.setBase('Idle_A');
         if (w.a.busy <= 0 && w.t > 1.2) { w.t = 0; w.a.once('Use_Item', { speed: 1.8 }); }
       }
-      w.a.update(adt);
+      this.tick(w.a, adt);
     }
   }
 

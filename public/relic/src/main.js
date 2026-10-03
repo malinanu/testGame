@@ -12,19 +12,28 @@ import { Adventure, HEROES } from './hero.js';
 import { VFX } from '../../chess/src/vfx.js';
 import { SFX } from '../../chess/src/sfx.js';
 import { Ambience } from './ambience.js';
-import { MATS } from './kit.js';
+import { MATS, kitShared } from './kit.js';
+import { sharedActorMaterials } from '../../src/actor.js';
 import { CONSTRUCT_TIME } from './world3d.js';
 
 const $ = id => document.getElementById(id);
 const SAVE_KEY = 'wwc-save-v1';
-const show = id => { document.querySelectorAll('.screen').forEach(s => s.classList.toggle('active', s.id === 'screen-' + id)); };
+let modal = true; // a full-screen panel covers the game: render less often behind it
+const show = id => { modal = id !== 'none'; document.querySelectorAll('.screen').forEach(s => s.classList.toggle('active', s.id === 'screen-' + id)); };
 const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); return true; } catch { return false; } } };
+// phones/tablets and 4-core machines start on Low; others on Medium (the player can always change it)
+const LOW_END = matchMedia('(pointer: coarse)').matches || (navigator.hardwareConcurrency || 8) <= 4;
+const QUALITIES = ['low', 'medium', 'high'];
+const PARTICLES = { low: 150, medium: 300, high: 600 };
 
 class Game {
   constructor(assets) {
     this.assets = assets;
-    const r = this.renderer = new THREE.WebGLRenderer({ canvas: $('c'), antialias: true });
-    r.setPixelRatio(Math.min(devicePixelRatio, 1.75)); r.shadowMap.enabled = true; r.shadowMap.type = THREE.PCFSoftShadowMap;
+    const q0 = store.get('wwc-quality') || (LOW_END ? 'low' : 'medium');
+    // MSAA is the costliest per-pixel option on weak GPUs: off on Low (takes effect at the next page load)
+    const r = this.renderer = new THREE.WebGLRenderer({ canvas: $('c'), antialias: q0 !== 'low', powerPreference: 'high-performance' });
+    r.shadowMap.enabled = true; r.shadowMap.type = THREE.PCFSoftShadowMap;
+    r.shadowMap.autoUpdate = false; // refreshed every 1-4 frames by quality, see frame()
     r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 1.0; r.outputColorSpace = THREE.SRGBColorSpace;
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(42, 1, 0.5, 900);
@@ -34,7 +43,7 @@ class Game {
     this.sfx = new SFX();
     this.setupLights();
     addEventListener('resize', () => this.resize());
-    this.applyQuality(store.get('wwc-quality') || 'medium', false); this.autoQuality = !store.get('wwc-quality');
+    this.applyQuality(q0, false); this.autoQuality = !store.get('wwc-quality');
     this.bindInput();
     this.bindTouch();
     r.setAnimationLoop(() => this.frame());
@@ -57,6 +66,8 @@ class Game {
     r.shadowMap.type = q === 'low' ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
     if (sh.mapSize.x !== ms) { sh.mapSize.set(ms, ms); sh.map?.dispose(); sh.map = null; }
     if (this.world) this.world._lodKey = null;
+    if (this.fx) this.fx.maxParticles = PARTICLES[q];
+    this.shadowEvery = q === 'low' ? 4 : q === 'medium' ? 2 : 1;
     this.resize();
     const el = $('m-quality'); if (el) el.textContent = `🖥️ Graphics: ${{ low: 'Low', medium: 'Medium', high: 'High' }[q]}`;
   }
@@ -67,14 +78,23 @@ class Game {
     this.camera.far = far; this.camera.updateProjectionMatrix();
     this.scene.fog.near = far * 0.45; this.scene.fog.far = far;
   }
-  /** First seconds of play: drop to Low if the device can't keep 25 fps. */
+  /**
+   * While the player hasn't picked a quality: measure 4-second windows of actual play and step quality
+   * down one level whenever a window averages under 36 fps (never up: that would oscillate).
+   */
   measure(raw) {
-    const m = this.fpsProbe ||= { t: 0, n: 0 };
-    m.t += raw; if (m.t < 1.5) return; m.n++;
-    if (m.t < 4.5) return;
-    this.autoQuality = false;
-    const fps = m.n / (m.t - 1.5);
-    if (fps < 25 && this.quality !== 'low') { this.applyQuality('low'); this.ui.notify(`Graphics set to Low for smoother play (${fps.toFixed(0)} fps). Change it in the menu.`, 'info'); }
+    if (modal || !this.speed) { this.fpsProbe = null; return; }
+    const m = this.fpsProbe ||= { t: 0, n: 0, warm: 1.5 };
+    if ((m.warm -= raw) > 0) return;
+    m.t += raw; m.n++;
+    if (m.t < 4) return;
+    const fps = m.n / m.t; this.fpsProbe = { t: 0, n: 0, warm: 0 };
+    const i = QUALITIES.indexOf(this.quality);
+    if (fps < 36 && i > 0) {
+      this.applyQuality(QUALITIES[i - 1], false);
+      this.ui.notify(`Graphics lowered to ${QUALITIES[i - 1] === 'low' ? 'Low' : 'Medium'} for smoother play (${fps.toFixed(0)} fps). Change it in the menu.`, 'info');
+    }
+    if (this.quality === 'low') this.autoQuality = false;
   }
 
   resize() { const w = innerWidth, h = innerHeight; this.renderer.setSize(w, h, false); this.camera.aspect = w / h; this.camera.updateProjectionMatrix(); }
@@ -84,26 +104,47 @@ class Game {
     this.teardown();
     this.colony = colony;
     this.world = new World3D(this.scene, this.assets, colony);
-    this.fx = new VFX(this.scene, '../assets/vfx/'); this.fx.preload(['smoke_01_a', 'spark_01_a', 'fire_8x8', 'star_06_a', 'smoke_07_a']);
+    this.fx = new VFX(this.scene, '../assets/vfx/'); this.fx.preload(['smoke_01_a', 'spark_01_a', 'fire_8x8', 'star_06_a', 'smoke_07_a']); this.fx.maxParticles = PARTICLES[this.quality];
     this.units = new Units(this);
     this.ambience = new Ambience(this);
     this.adv = new Adventure(this);
-    this.thumbs ||= renderThumbs(this.world.kit);
+    this.thumbs ||= renderThumbs(this.world.kit, this.renderer);
     this.ui = new UI(this);
     this.ui.renderBuild();
     const th = colony.ofType('townhall')[0], [x, z] = tileToWorld(th.cx - 0.5, th.cy - 0.5);
     this.cam.focus(x, z + 4, 0.38); this.cam.target.copy(this.cam.goal);
     this.units.restore();
     for (const r of colony.raids) this.adv.spawnRaid(r);
-    this.labels = new Map(); $('labels').innerHTML = '';
+    this.labels = new Map(); $('labels').innerHTML = ''; this.labelT = 0;
     this.setMode('select'); this.setHeroMode(false);
     $('hud').classList.remove('hidden'); show('none');
     this.running = true; this.autosaveT = 60; this.uiT = 0; this.buildT = 0; this.mmT = 0;
     this.lastGold = -1;
   }
+  /** Everything loaded once and reused by every game: geometry, materials and textures of the asset packs. */
+  keepSet() {
+    if (this.keep) return this.keep;
+    const k = this.keep = new Set(), add = m => { if (!m) return; k.add(m); for (const v of Object.values(m)) if (v?.isTexture) k.add(v); };
+    for (const group of Object.values(this.assets)) for (const sc of Object.values(group || {})) sc?.traverse?.(o => { if (o.geometry) k.add(o.geometry); [].concat(o.material || []).forEach(add); });
+    return k;
+  }
+  /** Free the GPU memory of a finished game: its terrain, overlays, baked buildings, roads, forest chunks, VFX. */
+  disposeScene(roots) {
+    const keep = this.keepSet(), shared = new Set([...kitShared(), ...sharedActorMaterials()]);
+    for (const m of shared) { keep.add(m); for (const v of Object.values(m)) if (v?.isTexture) keep.add(v); }
+    const done = new Set(), free = x => { if (x && !keep.has(x) && !done.has(x)) { done.add(x); x.dispose(); } };
+    for (const r of roots) r.traverse(o => {
+      if (o.isInstancedMesh) o.dispose();
+      free(o.geometry);
+      for (const m of [].concat(o.material || [])) { if (keep.has(m)) continue; for (const v of Object.values(m)) if (v?.isTexture) free(v); free(m); }
+    });
+    for (const t of Object.values(this.fx?.tex || {})) free(t);
+  }
   teardown() {
     if (!this.colony) return;
-    for (const o of [...this.scene.children]) if (o !== this.hemi && o !== this.sun && o !== this.sun.target) this.scene.remove(o);
+    const gone = [...this.scene.children].filter(o => o !== this.hemi && o !== this.sun && o !== this.sun.target);
+    for (const o of gone) this.scene.remove(o);
+    this.disposeScene([...gone, ...(this.units?.pool || []).map(a => a.root)]);
     this.colony = null; this.running = false;
   }
   save(quiet = false) {
@@ -155,16 +196,22 @@ class Game {
 
   makeGhost(type) {
     const kit = this.world.kit, def = BUILDINGS[type];
-    const g = kit.build(type);
+    const g = kit.model(type); // the cached bake: shares geometry, only the two ghost materials are new
     this.ghostMats = { ok: new THREE.MeshBasicMaterial({ color: 0x6dff8a, transparent: true, opacity: 0.45, depthWrite: false }), bad: new THREE.MeshBasicMaterial({ color: 0xff5a4a, transparent: true, opacity: 0.45, depthWrite: false }) };
     g.traverse(o => { if (o.isMesh) o.material = this.ghostMats.ok; });
     const foot = new THREE.Mesh(new THREE.PlaneGeometry(def.size[0] * TILE, def.size[1] * TILE).rotateX(-Math.PI / 2), this.ghostMats.ok);
-    foot.position.y = 0.12; g.add(foot);
+    foot.position.y = 0.12; foot.userData.own = true; g.add(foot);
     const r = def.range || def.logistic || def.territory;
-    if (r) { const ring = new THREE.Mesh(new THREE.RingGeometry(r * TILE - 0.25, r * TILE, 64).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffe27a, transparent: true, opacity: 0.8, depthWrite: false })); ring.position.y = 0.3; g.add(ring); }
+    if (r) { const ring = new THREE.Mesh(new THREE.RingGeometry(r * TILE - 0.25, r * TILE, 64).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffe27a, transparent: true, opacity: 0.8, depthWrite: false })); ring.position.y = 0.3; ring.userData.own = true; g.add(ring); }
     this.ghost = g; this.scene.add(g);
   }
-  clearGhost() { if (this.ghost) { this.scene.remove(this.ghost); this.ghost = null; } if (this.roadPreview) { this.scene.remove(this.roadPreview); this.roadPreview = null; } if (this.hoverMark) this.hoverMark.visible = false; }
+  clearGhost() {
+    this.hoverKey = null;
+    if (this.ghost) { // the ghost owns its footprint/ring geometry and its two materials (the kit pieces are shared)
+      this.scene.remove(this.ghost);
+      this.ghost.traverse(o => { if (o.isMesh && o.userData.own) { o.geometry.dispose(); o.material.dispose(); } });
+      this.ghostMats.ok.dispose(); this.ghostMats.bad.dispose(); this.ghost = null;
+    } if (this.roadPreview) { this.scene.remove(this.roadPreview); this.roadPreview = null; } if (this.hoverMark) this.hoverMark.visible = false; }
 
   // ------------------------------------------------------------------ input
   bindInput() {
@@ -291,6 +338,8 @@ class Game {
   hover(e) {
     const p = this.pick(e), c = this.colony; if (!p) return;
     if (this.mode === 'build' && this.ghost) {
+      const hk = `${p.tile}|${this.buildType}|${c.affordable(c.costOf(this.buildType))}`; // placement checks only change with the tile (or money)
+      if (hk === this.hoverKey) return; this.hoverKey = hk;
       const [x, y] = this.anchor(p.tile, this.buildType), def = BUILDINGS[this.buildType];
       const [wx, wz] = tileToWorld(x + def.size[0] / 2 - 0.5, y + def.size[1] / 2 - 0.5);
       this.ghost.position.set(wx, 0, wz);
@@ -334,13 +383,14 @@ class Game {
     if (this.roadPreview) this.scene.remove(this.roadPreview);
     const tiles = this.roadTiles(), c = this.colony;
     const g = new THREE.Group();
-    const okM = new THREE.MeshBasicMaterial({ color: 0xffe27a, transparent: true, opacity: 0.6, depthWrite: false }), badM = new THREE.MeshBasicMaterial({ color: 0xff5a4a, transparent: true, opacity: 0.5, depthWrite: false });
+    const P = this.previewRes ||= { geo: new THREE.PlaneGeometry(TILE * 0.8, TILE * 0.8).rotateX(-Math.PI / 2), ok: new THREE.MeshBasicMaterial({ color: 0xffe27a, transparent: true, opacity: 0.6, depthWrite: false }), bad: new THREE.MeshBasicMaterial({ color: 0xff5a4a, transparent: true, opacity: 0.5, depthWrite: false }) };
+    const okM = P.ok, badM = P.bad; // shared: a drag re-previews on every pointer move
     let cost = 0, bad = 0;
     for (const [x, y] of tiles) {
       const lvl = c.road[y * W + x], existing = this.paved ? lvl === 2 : lvl > 0;
       const err = existing || (this.paved && lvl === 1) ? '' : c.placeError('road', x, y) || (c.depositAt(x, y) ? 'deposit' : '');
       if (!existing && !err) cost++; if (err) bad++;
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(TILE * 0.8, TILE * 0.8).rotateX(-Math.PI / 2), err ? badM : okM);
+      const m = new THREE.Mesh(P.geo, err ? badM : okM);
       const [wx, wz] = tileToWorld(x, y); m.position.set(wx, 0.2, wz); g.add(m);
     }
     this.roadPreview = g; this.scene.add(g);
@@ -458,24 +508,27 @@ class Game {
     const span = THREE.MathUtils.clamp(this.cam.dist * 0.8, 40, 110), sc = this.sun.shadow.camera;
     if (sc.right !== span) { sc.left = sc.bottom = -span; sc.right = sc.top = span; sc.far = 300; sc.updateProjectionMatrix(); }
     const dusk = d > 0.5 && d < 0.62 ? (d - 0.5) / 0.12 : d > 0.95 || d < 0.06 ? 0.6 : 0;
-    const sunCol = new THREE.Color(0xfff1d0).lerp(new THREE.Color(0xff9a50), dusk);
+    const C = this.dnC ||= { a: new THREE.Color(), b: new THREE.Color(), dusk: new THREE.Color(0xff9a50), day: new THREE.Color(0xfff1d0), off: new THREE.Color(0x2a2018), on: new THREE.Color(0xffc45a) }; // scratch: no allocations per frame
+    const sunCol = C.a.copy(C.day).lerp(C.dusk, dusk);
     const target = isNight ? { sun: 0.32, hemi: 0.32, sky: 0x18223a, col: 0x8aa0ff, glow: 1 }
       : { sun: 2.5 - dusk * 1.0, hemi: 1.15 - dusk * 0.35, sky: dusk ? 0xe0a880 : 0xa9d8cf, col: sunCol.getHex(), glow: dusk * 0.6 };
     const k = 1 - Math.exp(-dt * 1.4); // converge in real time, whatever the frame rate
     this.sun.intensity += (target.sun - this.sun.intensity) * k; this.hemi.intensity += (target.hemi - this.hemi.intensity) * k;
-    this.sun.color.lerp(new THREE.Color(target.col), k);
-    this.scene.background.lerp(new THREE.Color(target.sky), k); this.scene.fog.color.copy(this.scene.background);
+    this.sun.color.lerp(C.b.set(target.col), k);
+    this.scene.background.lerp(C.b.set(target.sky), k); this.scene.fog.color.copy(this.scene.background);
     this.glow = (this.glow || 0) + (target.glow - (this.glow || 0)) * k;
-    MATS.window().color.copy(new THREE.Color(0x2a2018).lerp(new THREE.Color(0xffc45a), this.glow));
+    MATS.window().color.copy(C.off).lerp(C.on, this.glow);
   }
 
   smoke(dt) {
     this.smokeT = (this.smokeT || 0) - dt;
     if (this.smokeT > 0) return;
     this.smokeT = 0.35;
-    const c = this.colony;
+    const c = this.colony, t = this.cam.target, R = this.camera.far * 0.7;
     for (const [id, o] of this.world.buildingObjs) {
       const b = c.buildings.get(id); if (!b) continue;
+      // smoke nobody can see is just overdraw
+      const [bx, , bz] = this.worldOf(b); if (Math.hypot(bx - t.x, bz - t.z) > R) continue;
       const burning = b.fire > 0;
       if (burning) { const p = new THREE.Vector3(...this.worldOf(b, 1.5)); this.fx.burst(p, { tex: 'smoke_07_a', color: 0x40342c, count: 2, speed: 2, life: 2.2, size: 3, additive: false, gravity: 1.2, spread: 0.4 }); this.fx.burst(p, { tex: 'spark_01_a', color: 0xff8a3a, count: 3, speed: 3, life: 0.8, size: 0.6, gravity: 2 }); continue; }
       if (!o.smokes.length || !(b.running || b.tier != null) || Math.random() < 0.4) continue;
@@ -497,36 +550,56 @@ class Game {
     }
   }
 
-  labelsUpdate() {
-    const c = this.colony, el = $('labels'), seen = new Set(), v = new THREE.Vector3();
-    const put = (key, html, cls, wx, wy, wz) => {
-      seen.add(key);
-      let d = this.labels.get(key);
-      if (!d) { d = document.createElement('div'); d.className = cls; el.appendChild(d); this.labels.set(key, d); }
-      if (d.innerHTML !== html) d.innerHTML = html;
-      v.set(wx, wy, wz).project(this.camera);
+  /**
+   * World-anchored labels. Their content (which buildings need an icon, which lairs are known) changes
+   * rarely, so it is rebuilt at 4 Hz; positions follow the camera every frame but only touch the DOM
+   * when a label actually moves by half a pixel.
+   */
+  labelsUpdate(raw) {
+    const c = this.colony, el = $('labels');
+    if ((this.labelT = (this.labelT || 0) - raw) <= 0) {
+      this.labelT = 0.25;
+      const seen = new Set();
+      const put = (key, html, cls, wx, wy, wz) => {
+        seen.add(key);
+        let L = this.labels.get(key);
+        if (!L) {
+          const d = document.createElement('div'); d.className = cls; d.style.left = '0'; d.style.top = '0';
+          d.innerHTML = '<span></span>'; el.appendChild(d);
+          L = { d, span: d.firstChild, html: '', sx: NaN, sy: NaN, vis: true }; this.labels.set(key, L);
+        }
+        if (L.html !== html) { L.html = html; L.span.innerHTML = html; }
+        if (L.d.className !== cls) L.d.className = cls;
+        L.wx = wx; L.wy = wy; L.wz = wz;
+      };
+      if (!this.heroMode) for (const b of c.buildings.values()) {
+        const def = BUILDINGS[b.type];
+        let icon = '';
+        if (b.fire) icon = '🔥'; else if (b.ruined) icon = '🏚️';
+        else if (!b.connected && !def.storage && b.type !== 'outpost') icon = '⚠️🛤️';
+        else if (def.cycle && b.prod === 0 && b.status.startsWith('Missing')) icon = '📦❓';
+        else if (def.cycle && b.status.startsWith('Short')) icon = '👷❓';
+        else if (b.tier != null && b.residents < TIERS[b.tier].cap * 0.5 && b.built + 60 < c.time) icon = '😟';
+        if (icon) { const [x, , z] = this.worldOf(b); put('b' + b.id, icon, 'blabel', x, 5.2, z); }
+      }
+      for (const l of c.lairs) if (l.found && (!l.cleared || (l.relic && !l.relicTaken))) {
+        const [x, z] = tileToWorld(l.x + 1, l.y + 1);
+        const r = l.relic && RELICS.find(q => q.id === l.relic);
+        put('l' + l.id, l.cleared ? `💎 ${r.name}` : `☠️ ${{ camp: 'Bandit Camp', den: 'Brute Den', ruin: 'Haunted Ruin' }[l.kind]}${r && !l.relicTaken ? ` · ${r.icon}` : ''}`, 'flabel' + (r ? ' relic' : ''), x, 6.5, z);
+      }
+      for (const [k, L] of this.labels) if (!seen.has(k)) { L.d.remove(); this.labels.delete(k); }
+    }
+    const v = this.labelV ||= new THREE.Vector3(), W2 = innerWidth / 2, H2 = innerHeight / 2;
+    for (const L of this.labels.values()) {
+      v.set(L.wx, L.wy, L.wz).project(this.camera);
       const vis = v.z < 1 && Math.abs(v.x) < 1.1 && Math.abs(v.y) < 1.1;
-      d.style.display = vis ? '' : 'none';
-      if (vis) d.style.transform = `translate(${(v.x + 1) / 2 * innerWidth}px, ${(1 - v.y) / 2 * innerHeight}px) translate(-50%, -100%)`;
-      d.style.left = '0'; d.style.top = '0';
-    };
-    if (!this.heroMode) for (const b of c.buildings.values()) {
-      const def = BUILDINGS[b.type];
-      let icon = '';
-      if (b.fire) icon = '🔥'; else if (b.ruined) icon = '🏚️';
-      else if (!b.connected && !def.storage && b.type !== 'outpost') icon = '⚠️🛤️';
-      else if (def.cycle && b.prod === 0 && b.status.startsWith('Missing')) icon = '📦❓';
-      else if (def.cycle && b.status.startsWith('Short')) icon = '👷❓';
-      else if (b.tier != null && b.residents < TIERS[b.tier].cap * 0.5 && b.built + 60 < c.time) icon = '😟';
-      if (icon) { const [x, , z] = this.worldOf(b); put('b' + b.id, icon, 'blabel', x, 5.2, z); }
+      if (vis !== L.vis) { L.vis = vis; L.d.style.display = vis ? '' : 'none'; }
+      if (!vis) continue;
+      const sx = (v.x + 1) * W2, sy = (1 - v.y) * H2;
+      if (Math.abs(sx - L.sx) < 0.5 && Math.abs(sy - L.sy) < 0.5) continue;
+      L.sx = sx; L.sy = sy; L.d.style.transform = `translate(${sx.toFixed(1)}px, ${sy.toFixed(1)}px) translate(-50%, -100%)`;
     }
-    for (const l of c.lairs) if (l.found && (!l.cleared || (l.relic && !l.relicTaken))) {
-      const [x, z] = tileToWorld(l.x + 1, l.y + 1);
-      const r = l.relic && RELICS.find(q => q.id === l.relic);
-      put('l' + l.id, l.cleared ? `💎 ${r.name}` : `☠️ ${{ camp: 'Bandit Camp', den: 'Brute Den', ruin: 'Haunted Ruin' }[l.kind]}${r && !l.relicTaken ? ` · ${r.icon}` : ''}`, 'flabel' + (r ? ' relic' : ''), x, 6.5, z);
-    }
-    if (this.heroMode) { const it = this.adv.interaction(); $('heroprompt').textContent = it ? it.text : ''; }
-    for (const [k, d] of this.labels) if (!seen.has(k)) { d.remove(); this.labels.delete(k); }
+    if (this.heroMode) { const it = this.adv.interaction(), t = it ? it.text : ''; if (t !== this.promptText) { this.promptText = t; $('heroprompt').textContent = t; } }
   }
 
   heroHud() {
@@ -537,7 +610,14 @@ class Game {
   }
 
   frame() {
+    // behind the title, menu, stats or help screens the scene only needs ~10 fps (the clock keeps
+    // counting, so the simulation loses no time)
+    const now = performance.now();
+    if (modal && now - (this.lastDraw || 0) < 100) return;
+    this.lastDraw = now;
     const raw = Math.min(this.clock.getDelta(), 0.1);
+    this.frameN = (this.frameN || 0) + 1;
+    if (this.frameN % (this.shadowEvery || 1) === 0) this.renderer.shadowMap.needsUpdate = true;
     if (!this.running) { this.renderer.render(this.scene, this.camera); return; }
     const c = this.colony, dt = raw * this.speed;
     if (dt > 0) c.step(dt);
@@ -555,7 +635,7 @@ class Game {
     this.viewRange();
     if (this.autoQuality) this.measure(raw);
     this.ambience.update(raw);
-    this.labelsUpdate();
+    this.labelsUpdate(raw);
     if ((this.uiT -= raw) <= 0) {
       this.uiT = 0.25; this.ui.renderTop();
       if (this.heroMode) this.heroHud();

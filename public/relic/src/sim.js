@@ -353,6 +353,13 @@ export class Colony {
     while (this.acc >= STEP) { this.acc -= STEP; this.tick(); }
   }
 
+  /** Residents per tier (also right after a load, before the first tick, for the HUD and Sanctum checks). */
+  countPop() {
+    const pop = { settlers: 0, craftsmen: 0, merchants: 0, total: 0 };
+    for (const b of this.buildings.values()) if (b.tier != null) { pop[TIERS[b.tier].id] += b.residents; pop.total += b.residents; }
+    return this.pop = pop;
+  }
+
   tick() {
     if (this.dirty) this.recompute();
     this.time += STEP;
@@ -360,9 +367,7 @@ export class Colony {
     const blds = [...this.buildings.values()];
 
     // population & workforce
-    const pop = { settlers: 0, craftsmen: 0, merchants: 0, total: 0 };
-    for (const b of blds) if (b.tier != null) { pop[TIERS[b.tier].id] += b.residents; pop.total += b.residents; }
-    this.pop = pop;
+    const pop = this.countPop();
     for (const k of ['settlers', 'craftsmen', 'merchants']) this.peak[k] = Math.max(this.peak[k], pop[k]);
     const demand = [0, 0, 0];
     for (const b of blds) { const wk = BUILDINGS[b.type].workers; if (wk && this.active(b)) demand[wk.tier] += wk.n; }
@@ -740,7 +745,7 @@ export class Colony {
       _peak: d.peak, unlockedSeen: d.unlockedSeen, nextId: d.nextId, nextRaidId: d.nextRaidId, raids: d.raids, trips: d.trips, deposits: d.deposits, lairs: d.lairs, chests: d.chests, stats: d.stats });
     c.rand = rng(d.seed * 4099 + 77 + Math.floor(d.time));
     for (const b of d.buildings) { c.buildings.set(b.id, b); for (let j = 0; j < b.h; j++) for (let i = 0; i < b.w; i++) c.occ[idx(b.x + i, b.y + j)] = b.id; }
-    c.recomputeTerritory(); c.recompute(); c.events = [];
+    c.recomputeTerritory(); c.recompute(); c.countPop(); c.events = [];
     return c;
   }
 }

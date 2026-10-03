@@ -24,4 +24,7 @@ for (const pack of ['dungeon', 'resources', 'tools', 'forest', 'props']) {
 }
 const clips = glbJson(`${A}packs/clips.glb`);
 assert.ok(clips.animations.length >= 20 && !(clips.meshes || []).length, 'clips pack: animations only');
+const bones = clips.nodes.map(n => n.name);
+assert.equal(new Set(bones).size, bones.length, 'one skeleton: no duplicate bone names (the loader would rename them and clips would miss)');
+assert.ok(clips.animations.every(an => an.channels.every(c => Number.isInteger(c.target.node))), 'every channel targets a bone');
 console.log('ok asset packs (every model present, meshopt, one atlas per pack, clips without meshes)');

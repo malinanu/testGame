@@ -251,6 +251,7 @@ const fresh = (seed = 3) => { const c = new Colony({ seed }); return { c, bot: n
   c.step(200); c.reveal(10, 10, 6);
   const json = c.save(), d = Colony.load(json);
   assert.equal(d.save(), json, 'identical after reload');
+  assert.ok(c.pop.total > 0 && d.pop.total === c.pop.total, 'population known right after loading (before any tick)');
   c.step(120); d.step(120);
   assert.equal(JSON.stringify([c.gold, c.stock, c.pop]), JSON.stringify([d.gold, d.stock, d.pop]), 'continues identically');
   console.log(`ok save/load (${(json.length / 1024).toFixed(0)} KB, deterministic after reload)`);

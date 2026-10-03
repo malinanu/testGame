@@ -56,7 +56,17 @@ for (const pack of PACKS) {
 // animation clips without the 6-mesh bodies that ship in the rig files
 {
   const doc = await io.read(join(assets, 'anim/Rig_Medium_General.glb'));
+  const bones = new Map(doc.getRoot().listNodes().map(n => [n.getName(), n]));
   mergeDocuments(doc, await io.read(join(assets, 'anim/Rig_Medium_MovementBasic.glb')));
+  // both rigs have the same skeleton: point the second file's clips at the first file's bones, or the
+  // loader would rename the duplicates (lowerarml_1 …) and those clips would animate nothing
+  for (const anim of doc.getRoot().listAnimations()) for (const ch of anim.listChannels()) {
+    const n = ch.getTargetNode(), same = n && bones.get(n.getName());
+    if (same && same !== n) ch.setTargetNode(same);
+  }
+  const first = doc.getRoot().listScenes()[0];
+  for (const sc of doc.getRoot().listScenes()) if (sc !== first) sc.dispose();
+  for (const node of doc.getRoot().listNodes()) if (bones.has(node.getName()) && bones.get(node.getName()) !== node) node.dispose(); // the duplicate rig
   for (const node of doc.getRoot().listNodes()) if (node.getMesh()) node.setMesh(null);
   for (const skin of doc.getRoot().listSkins()) skin.dispose();
   const size = await finish(doc, join(assets, 'packs', 'clips.glb'));

@@ -1,0 +1,64 @@
+name: Deploy Game to CloudPanel
+
+on:
+  push:
+    branches: [main, claude/confident-ride-rrxtsz]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-cloudpanel
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run test suite
+        run: npm test
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate Deployment Secrets
+        run: |
+          missing=0
+          if [ -z "${{ secrets.CLOUDPANEL_HOST }}" ]; then
+            echo "::error::Missing secret CLOUDPANEL_HOST (your server IP or domain)"
+            missing=1
+          fi
+          if [ -z "${{ secrets.CLOUDPANEL_USER }}" ]; then
+            echo "::error::Missing secret CLOUDPANEL_USER (site user in CloudPanel)"
+            missing=1
+          fi
+          if [ -z "${{ secrets.CLOUDPANEL_SSH_KEY }}" ]; then
+            echo "::error::Missing secret CLOUDPANEL_SSH_KEY (private SSH key)"
+            missing=1
+          fi
+          if [ -z "${{ secrets.CLOUDPANEL_DOMAIN }}" ]; then
+            echo "::error::Missing secret CLOUDPANEL_DOMAIN (your domain name configured in CloudPanel)"
+            missing=1
+          fi
+          if [ $missing -eq 1 ]; then
+            exit 1
+          fi
+
+      - name: Deploy to CloudPanel via rsync
+        uses: easingthemes/ssh-deploy@v5.0.3
+        with:
+          SSH_PRIVATE_KEY: ${{ secrets.CLOUDPANEL_SSH_KEY }}
+          ARGS: "-avzr --delete"
+          SOURCE: "public/"
+          REMOTE_HOST: ${{ secrets.CLOUDPANEL_HOST }}
+          REMOTE_USER: ${{ secrets.CLOUDPANEL_USER }}
+          SSH_PORT: ${{ secrets.CLOUDPANEL_PORT || '22' }}
+          TARGET: "/home/${{ secrets.CLOUDPANEL_USER }}/htdocs/${{ secrets.CLOUDPANEL_DOMAIN }}/"

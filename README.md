@@ -191,6 +191,12 @@ To share one world between players:
 3. Put the project URL and **publishable** key (`sb_publishable_…`, from the dashboard's **Connect** dialog or Project Settings → API Keys; called "anon" on older projects) in `public/arena/config.js`. Never put the secret or service-role key there. Then host `public/` anywhere static.
    Add `?offline` to the URL to force the local demo.
 
+**Deploy automatically (GitHub Actions):** `.github/workflows/deploy-arena.yml` runs `npm test`, then deploys
+the function whenever server code changes on `main` (or on demand from the Actions tab once the workflow is on
+`main`). Add one repository secret, `SUPABASE_ACCESS_TOKEN`: a personal access token from your Supabase account
+settings. The workflow never needs the project's secret or service-role key. The function reads those from
+the platform. After deploying, the workflow smoke-tests the live endpoint.
+
 **No CLI? Deploy from the dashboard instead:**
 1. **SQL Editor:** paste and run `supabase/migrations/20261002000000_arena.sql`.
 2. **Edge Functions → Deploy a new function → Via Editor:** name it `arena`, replace the code with the single-file bundle `dist/arena-function.ts` (rebuild it with `npm run bundle`), and deploy.

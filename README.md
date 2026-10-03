@@ -290,6 +290,18 @@ boss, an elite squad called the Hollow Crown.
 
 ## Performance on mid-range devices
 All four games share the loader and character code, so these apply everywhere:
+- **Packed assets.** `npm run pack` (`scripts/pack-assets.mjs`, gltf-transform) merges each KayKit folder into one
+  meshopt-compressed GLB in `public/assets/packs/`. It also compresses the six characters and keeps one
+  animation file without the unused rig meshes. The loaders split the packs back into the same per-model
+  tables, and the original files stay as the fallback.
+
+  | Game | Requests | Download |
+  |---|---|---|
+  | Colony | 290 → 59 | 9.8 → 5.7 MB |
+  | Tactics | 133 → 43 | 6.2 → 3.5 MB |
+  | Chess | 111 → 85 | 7.9 → 5.8 MB |
+
+  Measured in headless Chromium. Re-run `npm run pack` after changing any model.
 - **Loading.** `THREE.Cache` is on, and each pack's texture atlas is decoded and uploaded once, not once per model
   file. In the colony this cuts GPU textures from 171 to 36 and load time from about 12 s to 3 s (headless test).
 - **Characters.** The 7–9 skinned parts of each KayKit character are merged into one mesh at load, so each
@@ -301,6 +313,7 @@ All four games share the loader and character code, so these apply everywhere:
 In the colony:
 - Buildings of a type share one baked model.
 - Off-screen villagers are hidden and animate at 4 Hz, and only villagers near the view cast shadows.
+- The villager budget depends on quality: Low has no strollers and fewer carriers and workers.
 - The shadow map refreshes every 1–4 frames depending on quality.
 - The scene renders at about 10 fps behind menus.
 - Labels, the build menu and the inspector only touch the DOM when something changed.

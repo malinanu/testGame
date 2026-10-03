@@ -53,6 +53,16 @@ for (const pack of PACKS) {
   console.log(`${pack}: ${files.length} files, ${kb(raw)} of meshes (+ textures) → ${kb(size)}`);
 }
 
+// characters stay one file each (own texture) but get the same compression; one quantization volume
+// for the whole file so all body parts share one transform (they are merged into one mesh at load)
+mkdirSync(join(assets, 'packs/chars'), { recursive: true });
+for (const f of readdirSync(join(assets, 'chars')).filter(f => f.endsWith('.glb'))) {
+  const doc = await io.read(join(assets, 'chars', f));
+  await doc.transform(dedup(), prune(), weld(), meshopt({ encoder: MeshoptEncoder, level: 'medium', quantizationVolume: 'scene' }));
+  await io.write(join(assets, 'packs/chars', f), doc);
+  console.log(`chars/${f}: ${kb(statSync(join(assets, 'chars', f)).size)} → ${kb(statSync(join(assets, 'packs/chars', f)).size)}`);
+}
+
 // animation clips without the 6-mesh bodies that ship in the rig files
 {
   const doc = await io.read(join(assets, 'anim/Rig_Medium_General.glb'));

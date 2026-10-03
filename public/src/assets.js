@@ -102,7 +102,8 @@ export async function loadAssets({ base = '', props = PROPS, forest = FOREST, ch
   const jobs = [];
   let done = 0;
   const track = p => { jobs.push(p.then(() => onProgress?.(++done, jobs.length))); };
-  for (const n of chars) track(load(`${base}assets/chars/${n}.glb`).then(g => a.chars[n] = mergeCharacter(g.scene)));
+  // meshopt-compressed copies (scripts/pack-assets.mjs) with the originals as the fallback
+  for (const n of chars) track(load(`${base}assets/packs/chars/${n}.glb`).catch(() => load(`${base}assets/chars/${n}.glb`)).then(g => a.chars[n] = mergeCharacter(g.scene)));
   // packed folders (one request each); the per-file originals are the fallback
   const pick = async (pack, names, file, into) => {
     const P = names.length ? await loadPack(`${base}assets/packs/${pack}.glb`) : null;

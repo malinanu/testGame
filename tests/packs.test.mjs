@@ -22,6 +22,10 @@ for (const pack of ['dungeon', 'resources', 'tools', 'forest', 'props']) {
   assert.ok(j.extensionsUsed?.includes('EXT_meshopt_compression'), `${pack} is meshopt-compressed`);
   assert.ok((j.images || []).length <= (pack === 'props' ? 6 : 3), `${pack}: textures de-duplicated (${(j.images || []).length})`);
 }
+for (const f of readdirSync(A + 'chars').filter(f => f.endsWith('.glb'))) {
+  const j = glbJson(`${A}packs/chars/${f}`);
+  assert.ok(j.extensionsUsed?.includes('EXT_meshopt_compression') && (j.skins || []).length === 1, `compressed ${f} keeps its skin`);
+}
 const clips = glbJson(`${A}packs/clips.glb`);
 assert.ok(clips.animations.length >= 20 && !(clips.meshes || []).length, 'clips pack: animations only');
 const bones = clips.nodes.map(n => n.name);

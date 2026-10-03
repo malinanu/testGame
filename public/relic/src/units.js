@@ -11,12 +11,15 @@ import { GOODS, BUILDINGS } from './data.js';
 import { tileToWorld } from './world3d.js';
 
 const LOOKS = [['Rogue', 0xffffff], ['Ranger', 0xffffff], ['Barbarian', 0xe8d8c0], ['Rogue_Hooded', 0xd8c8a8], ['Knight', 0xc8c0b0], ['Mage', 0xe0d8ff]];
-const MAX_CARRIERS = 40, MAX_STROLL = 24, MAX_SITE = 18;
+// Visible-actor budgets by graphics quality: every villager is a skinned draw call (+ shadow) and an
+// animation mixer, so Low keeps the town readable with far fewer of them (and no strollers).
+const LIMITS = { low: { carriers: 14, stroll: 0, site: 8, jobs: 6 }, medium: { carriers: 26, stroll: 14, site: 12, jobs: 10 }, high: { carriers: 40, stroll: 24, site: 18, jobs: 14 } };
 const SITE_TOOL = { quarry: 'tool:pickaxe', blacksmith: 'tool:hammer', sawmill: 'tool:saw', stonemason: 'tool:mallet', farm: 'tool:shovel', flaxfarm: 'tool:shovel', forester: 'tool:shovel', ironmine: 'tool:pickaxe', goldmine: 'tool:pickaxe', charcoal: 'tool:shovel' };
 
 export class Units {
   constructor(game) { this.g = game; this.walkers = []; this.strollers = []; this.jobs = []; this.site = new Map(); this.pool = []; this.n = 0; this.strollT = 2; }
   get c() { return this.g.colony; }
+  get lim() { return LIMITS[this.g.quality] || LIMITS.medium; }
   worldPt(x, y) { const [wx, wz] = tileToWorld(x, y); return new THREE.Vector3(wx, 0.05, wz); }
 
   actor() {
@@ -78,7 +81,7 @@ export class Units {
   // ------------------------------------------------------------------ carriers
   /** A sim trip started: storage `from` → building `to`, picks up at trip.pick, home at trip.end. */
   trip(trip) {
-    if (this.walkers.length >= MAX_CARRIERS) return;
+    if (this.walkers.length >= this.lim.carriers) return;
     const c = this.c, s = c.buildings.get(trip.from), b = c.buildings.get(trip.to);
     if (!s || !b) return;
     const tiles = c.roadPath(s, b);
@@ -112,7 +115,7 @@ export class Units {
   /** The sim felled a tree for building `by`: a worker walks over and chops it. */
   chop(by, x, y) {
     const c = this.c, b = c.buildings.get(by);
-    if (!b || this.jobs.length > 14) return null;
+    if (!b || this.jobs.length >= this.lim.jobs) return null;
     const home = this.worldPt(b.cx - 0.5, b.cy - 0.5), tree = this.worldPt(x, y);
     if (!this.nearCamera(tree)) return null;
     const a = this.actor(); this.give(a, 'tool:axe');
@@ -124,7 +127,7 @@ export class Units {
   /** Construction: a builder hammers in front of the new building for `dur` seconds. */
   build(b, dur) {
     const p = this.worldPt(b.cx - 0.5, b.cy - 0.5 + b.h / 2 + 0.6);
-    if (!this.nearCamera(p)) return;
+    if (!this.nearCamera(p) || this.jobs.length >= this.lim.jobs) return;
     const a = this.actor(); this.give(a, 'tool:hammer');
     a.root.position.copy(p); a.root.rotation.y = Math.PI;
     this.jobs.push({ a, kind: 'build', t: 0, dur, phase: 'work', facing: Math.PI });
@@ -134,7 +137,7 @@ export class Units {
   syncSiteWorkers() {
     const c = this.c, want = new Set();
     const busy = [...c.buildings.values()].filter(b => SITE_TOOL[b.type] && b.running && c.active(b) && this.nearCamera(this.worldPt(b.cx, b.cy), 70))
-      .slice(0, MAX_SITE);
+      .slice(0, this.lim.site);
     for (const b of busy) {
       want.add(b.id);
       if (this.site.has(b.id)) continue;
@@ -173,7 +176,7 @@ export class Units {
     // strollers: walk to the service, linger, walk home (real time × game speed)
     if (sp && (this.strollT -= dt) <= 0) {
       this.strollT = 1.2;
-      const cap = Math.min(MAX_STROLL, Math.floor(c.pop.total / 8));
+      const cap = Math.min(this.lim.stroll, Math.floor(c.pop.total / 8));
       if (this.strollers.length < cap) this.spawnStroller();
     }
     for (const s of this.strollers) {

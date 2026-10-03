@@ -81,6 +81,17 @@ console.log('ok rules (mate, stalemate, en passant, castling, promotion, SAN, dr
     const lvl = ['easy', 'medium'][i % 2], r2 = search(c.fen(), { ...LEVELS[lvl], timeMs: 150 });
     assert.ok(c.play({ from: r2.move.from, to: r2.move.to, promo: r2.move.promo }), 'AI move is legal');
   }
-  const t = Date.now(); const h = search(START_FEN, LEVELS.hard);
+  const t = Date.now(); const h = search(START_FEN, { ...LEVELS.hard, useBook: false });
   console.log(`ok AI (mate-in-1, legal self-play; hard reached depth ${h.depth} in ${Date.now() - t}ms, ${h.nodes} nodes)`);
+
+  // Opening variety: AI plays multiple sound moves instead of the exact same line every game
+  const startMoves = new Set();
+  for (let i = 0; i < 25; i++) startMoves.add(sqName(search(START_FEN, LEVELS.medium).move.to));
+  assert.ok(startMoves.size >= 2, 'AI plays different openings from start');
+
+  const e4Replies = new Set();
+  const e4Board = new Chess(); e4Board.play('e4');
+  for (let i = 0; i < 25; i++) e4Replies.add(sqName(search(e4Board.fen(), LEVELS.medium).move.to));
+  assert.ok(e4Replies.size >= 2, 'AI plays different replies to 1.e4');
+  console.log('ok opening variety (distinct White openings and Black defenses)');
 }

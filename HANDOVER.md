@@ -150,7 +150,7 @@ Useful URL flags:
 
 ### 5.4 Chess (`public/chess/src`)
 - `chess.js`: the rules engine, perft-verified.
-- `ai.js` + `ai-worker.js`: alpha-beta with quiescence search, in a Web Worker.
+- `ai.js` + `book.js` + `ai-worker.js`: opening book with 40+ master lines, positional evaluation, transposition table, multi-candidate selection, and alpha-beta with quiescence search in a Web Worker.
 - `scene.js`: the hall, pieces and capture choreography.
 - `vfx.js`: pooled particles, sprite sheets, debris, lightning, shake.
 - `sfx.js`: the synth. `main.js`: flow and HUD.

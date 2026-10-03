@@ -35,6 +35,39 @@ class Pool {
   has(key) { return this.slot.has(key); }
 }
 
+/**
+ * The same API as Pool, split into CH×CH-tile chunks with fixed bounding spheres, so three.js
+ * frustum culling (camera and shadow passes) skips chunks that are off screen.
+ */
+const CH = 24, NC = W / CH;
+class ChunkedPool {
+  constructor(scene, mesh, { shadow = true } = {}) {
+    this.geometry = mesh.geometry; this.material = mesh.material; this.hidden = false; this.chunks = [];
+    for (let cy = 0; cy < NC; cy++) for (let cx = 0; cx < NC; cx++) {
+      const p = new Pool(scene, mesh, CH * CH, { shadow }), i = p.inst;
+      const [x0, z0] = tileToWorld(cx * CH, cy * CH), [x1, z1] = tileToWorld(cx * CH + CH - 1, cy * CH + CH - 1);
+      i.frustumCulled = true; i.visible = false;
+      i.boundingSphere = new THREE.Sphere(new THREE.Vector3((x0 + x1) / 2, 4, (z0 + z1) / 2), Math.hypot(x1 - x0, z1 - z0) / 2 + 12);
+      p.center = i.boundingSphere.center; p.shadow = shadow;
+      this.chunks.push(p);
+    }
+  }
+  chunk(key) { const x = key % W, y = (key / W) | 0; return this.chunks[Math.floor(y / CH) * NC + Math.floor(x / CH)]; }
+  set(key, m) { const c = this.chunk(key); c.set(key, m); c.inst.visible = !this.hidden; }
+  remove(key) { const c = this.chunk(key); c.remove(key); if (!c.slot.size) c.inst.visible = false; }
+  has(key) { return this.chunk(key).has(key); }
+  setHidden(h) { if (h === this.hidden) return; this.hidden = h; for (const c of this.chunks) c.inst.visible = !h && c.slot.size > 0; }
+  /** Shadows only for chunks within `range` world units of p (Infinity = all). */
+  shadowsNear(p, range) { for (const c of this.chunks) c.inst.castShadow = c.shadow && Math.hypot(c.center.x - p.x, c.center.z - p.z) < range; }
+  /** Chunks farther than `range` from the camera draw `light` (a cheaper model) instead. */
+  farModel(cam, range, light) {
+    for (const c of this.chunks) {
+      const far = light && Math.hypot(c.center.x - cam.x, c.center.z - cam.z) > range;
+      c.inst.geometry = far ? light.geometry : this.geometry; c.inst.material = far ? light.material : this.material;
+    }
+  }
+}
+
 export class World3D {
   constructor(scene, assets, colony) {
     this.scene = scene; this.a = assets; this.c = colony; this.kit = new Kit(assets);
@@ -114,7 +147,7 @@ export class World3D {
     void v; return m;
   }
   buildForest() {
-    this.trees = TREE_MODELS.map(n => new Pool(this.root, firstMesh(this.a.forest[n]), 2600));
+    this.trees = TREE_MODELS.map(n => new ChunkedPool(this.root, firstMesh(this.a.forest[n])));
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const v = this.c.tree[idx(x, y)]; if (v) this.trees[(v - 1) % 8].set(idx(x, y), this.treeMatrix(x, y, v)); }
   }
   setTree(x, y, on, animate = true) {
@@ -127,7 +160,7 @@ export class World3D {
     } else {
       for (const pool of this.trees) if (pool.has(k)) {
         if (animate && this.fog(x, y)) { // falling tree
-          const mesh = new THREE.Mesh(pool.inst.geometry, pool.inst.material), m = this.treeMatrix(x, y, 1);
+          const mesh = new THREE.Mesh(pool.geometry, pool.material), m = this.treeMatrix(x, y, 1);
           m.decompose(mesh.position, mesh.quaternion, mesh.scale); mesh.castShadow = true;
           this.root.add(mesh); this.falling.push({ mesh, t: 0, dir: hash(x, y, 8) * Math.PI * 2 });
         }
@@ -136,8 +169,8 @@ export class World3D {
     }
   }
   buildRocksAndDecor() {
-    const rocks = ['Rock_3_A', 'Rock_3_E', 'Rock_3_F', 'Rock_3_G'].map(n => new Pool(this.root, firstMesh(this.a.forest[n]), 3000));
-    const decor = ['Bush_1_A', 'Bush_2_A', 'Bush_3_A', 'Bush_4_A', 'Grass_1_A', 'Grass_2_A', 'Rock_1_A', 'Rock_2_A'].map(n => new Pool(this.root, firstMesh(this.a.forest[n]), 2500, { shadow: false }));
+    const rocks = ['Rock_3_A', 'Rock_3_E', 'Rock_3_F', 'Rock_3_G'].map(n => new ChunkedPool(this.root, firstMesh(this.a.forest[n])));
+    const decor = ['Bush_1_A', 'Bush_2_A', 'Bush_3_A', 'Bush_4_A', 'Grass_1_A', 'Grass_2_A', 'Rock_1_A', 'Rock_2_A'].map(n => new ChunkedPool(this.root, firstMesh(this.a.forest[n]), { shadow: false }));
     this.decor = decor;
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
@@ -155,6 +188,21 @@ export class World3D {
       }
     }
     this.rocks = rocks;
+  }
+  /**
+   * Level of detail from the camera: decor hides at overview zoom (always on Low quality), and only
+   * trees and rocks near the view centre cast shadows (Low: close only, Medium: mid, High: all).
+   */
+  lod(target, zoom, quality, camPos = target) {
+    const hideDecor = quality === 'low' || zoom > (quality === 'high' ? 0.9 : 0.72);
+    for (const d of this.decor) d.setHidden(hideDecor);
+    const range = quality === 'high' ? Infinity : quality === 'medium' ? 40 + (1 - zoom) * 40 : 28;
+    const key = `${Math.round(target.x / 8)},${Math.round(target.z / 8)},${Math.round(camPos.x / 8)},${Math.round(camPos.z / 8)},${Math.round(range / 4)},${quality}`;
+    if (key === this._lodKey) return; this._lodKey = key;
+    for (const p of [...this.trees, ...this.rocks]) p.shadowsNear(target, range);
+    // Low: distant forest chunks all use the lightest tree model (Tree_2_A, about a third of the triangles)
+    const light = quality === 'low' ? this.trees[1] : null;
+    for (const p of this.trees) p.farModel(camPos, 70, light && p !== light ? light : null);
   }
   clearDecor(x, y) { const k = idx(x, y); for (const d of this.decor) d.remove(k); }
 

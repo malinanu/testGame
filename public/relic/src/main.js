@@ -33,8 +33,10 @@ class Game {
     this.speed = 1; this.mode = 'select'; this.selected = null; this.heroMode = false;
     this.sfx = new SFX();
     this.setupLights();
-    addEventListener('resize', () => this.resize()); this.resize();
+    addEventListener('resize', () => this.resize());
+    this.applyQuality(store.get('wwc-quality') || 'medium', false); this.autoQuality = !store.get('wwc-quality');
     this.bindInput();
+    this.bindTouch();
     r.setAnimationLoop(() => this.frame());
   }
 
@@ -45,6 +47,34 @@ class Game {
     this.sun = new THREE.DirectionalLight(0xfff1d0, 2.5); this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048); this.sun.shadow.bias = -0.0005; this.sun.shadow.normalBias = 0.04;
     s.add(this.sun, this.sun.target);
+  }
+
+  /** Graphics quality: pixel ratio, shadow map size/filtering, shadow casters and decor (see World3D.lod). */
+  applyQuality(q, save = true) {
+    this.quality = q; if (save) store.set('wwc-quality', q);
+    const r = this.renderer, sh = this.sun.shadow, ms = q === 'low' ? 1024 : 2048;
+    r.setPixelRatio(q === 'low' ? Math.min(devicePixelRatio, 1) : q === 'medium' ? Math.min(devicePixelRatio, 1.25) : Math.min(devicePixelRatio, 2));
+    r.shadowMap.type = q === 'low' ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
+    if (sh.mapSize.x !== ms) { sh.mapSize.set(ms, ms); sh.map?.dispose(); sh.map = null; }
+    if (this.world) this.world._lodKey = null;
+    this.resize();
+    const el = $('m-quality'); if (el) el.textContent = `🖥️ Graphics: ${{ low: 'Low', medium: 'Medium', high: 'High' }[q]}`;
+  }
+  /** View distance by quality: the far plane (and the fog that hides it) follow the camera distance. */
+  viewRange() {
+    const far = (this.heroMode ? 30 : this.cam.dist) + { low: 110, medium: 170, high: 380 }[this.quality];
+    if (Math.abs(far - this.camera.far) < 2) return;
+    this.camera.far = far; this.camera.updateProjectionMatrix();
+    this.scene.fog.near = far * 0.45; this.scene.fog.far = far;
+  }
+  /** First seconds of play: drop to Low if the device can't keep 25 fps. */
+  measure(raw) {
+    const m = this.fpsProbe ||= { t: 0, n: 0 };
+    m.t += raw; if (m.t < 1.5) return; m.n++;
+    if (m.t < 4.5) return;
+    this.autoQuality = false;
+    const fps = m.n / (m.t - 1.5);
+    if (fps < 25 && this.quality !== 'low') { this.applyQuality('low'); this.ui.notify(`Graphics set to Low for smoother play (${fps.toFixed(0)} fps). Change it in the menu.`, 'info'); }
   }
 
   resize() { const w = innerWidth, h = innerHeight; this.renderer.setSize(w, h, false); this.camera.aspect = w / h; this.camera.updateProjectionMatrix(); }
@@ -111,11 +141,16 @@ class Game {
   updateModeHint(err = '') {
     const el = $('modehint');
     let t = '';
-    if (this.mode === 'build') t = `Placing <b>${BUILDINGS[this.buildType].name}</b>: click a green spot next to a road · right-click / Esc to stop`;
+    const touch = document.body.classList.contains('touch');
+    if (this.mode === 'build') t = touch ? `Placing <b>${BUILDINGS[this.buildType].name}</b>: tap a spot next to a road` : `Placing <b>${BUILDINGS[this.buildType].name}</b>: click a green spot next to a road · right-click / Esc to stop`;
+    else if (this.mode === 'road' && touch) t = this.paved ? 'Paved roads: drag a finger to pave (🧱1 + 💰2 per tile)' : 'Roads: drag a finger to paint (💰1 per tile)';
     else if (this.mode === 'road') t = this.paved ? 'Paved roads: drag to paint or pave dirt roads (1 brick + 2 gold per tile) · Esc to stop' : 'Roads: drag to paint (1 gold per tile) · right-click / Esc to stop';
+    else if (this.mode === 'demolish' && touch) t = 'Demolish: tap a building or road';
     else if (this.mode === 'demolish') t = 'Demolish: click a building or road (goods are half refunded) · Esc to stop';
     if (err) t += `<br><span class="err">${err}</span>`;
+    if (t) t += ' <button id="mh-x" title="Stop (Esc)">✕</button>';
     el.innerHTML = t; el.classList.toggle('hidden', !t);
+    const x = $('mh-x'); if (x) x.onclick = () => this.setMode('select');
   }
 
   makeGhost(type) {
@@ -144,7 +179,14 @@ class Game {
     dom.addEventListener('pointerdown', e => {
       if (!this.running) return;
       this.sfx.ensure();
-      if (this.heroMode) { if (e.button === 0) this.adv.attack(); return; }
+      const touch = e.pointerType === 'touch';
+      if (touch) document.body.classList.add('touch');
+      if (this.heroMode) { if (e.button === 0 && !touch) this.adv.attack(); return; }
+      if (touch && this.cam.touches.size > 1) { // a second finger: it's a pinch, not a tap or a road
+        this.down = null; if (this.roadDrag) { this.roadDrag = null; if (this.roadPreview) { this.scene.remove(this.roadPreview); this.roadPreview = null; } this.updateModeHint(); }
+        return;
+      }
+      if (touch) this.hover(e);
       if (e.button === 2) { if (this.mode !== 'select') this.setMode('select'); return; }
       if (e.button !== 0) return;
       const p = this.pick(e); if (!p) return;
@@ -154,6 +196,7 @@ class Game {
     addEventListener('pointerup', e => {
       if (!this.running || this.heroMode || e.button !== 0) return;
       if (this.roadDrag) { this.placeRoad(); return; }
+      if (e.pointerType === 'touch' && this.cam.gesture) { this.down = null; return; }
       if (!this.down || Math.hypot(e.clientX - this.down.x, e.clientY - this.down.y) > 6 || e.target !== dom) { this.down = null; return; }
       this.down = null;
       const p = this.pick(e); if (!p) return;
@@ -216,6 +259,28 @@ class Game {
     const type = BUILDINGS[b.type].tier != null || b.tier != null ? 'hut' : b.type;
     if (BUILDINGS[type].buildable === false || BUILDINGS[type].unique) return this.ui.notify(`Only one ${BUILDINGS[type].name} can exist.`, 'warn');
     this.startBuild(type);
+  }
+
+  /** On-screen joystick + action buttons for the hero on touch screens; one-finger road painting. */
+  bindTouch() {
+    if (matchMedia('(pointer: coarse)').matches) document.body.classList.add('touch');
+    this.cam.canPan = () => this.mode !== 'road';
+    const stick = $('stick'), knob = stick.querySelector('i'), keys = this.cam.keys;
+    let sid = null, c0 = null;
+    const move = e => {
+      let dx = e.clientX - c0.x, dy = e.clientY - c0.y; const len = Math.hypot(dx, dy);
+      if (len > c0.R) { dx *= c0.R / len; dy *= c0.R / len; }
+      knob.style.transform = `translate(${dx}px, ${dy}px)`;
+      keys.stick = len < c0.R * 0.2 ? null : { x: dx / c0.R, z: dy / c0.R };
+    };
+    stick.addEventListener('pointerdown', e => { e.preventDefault(); sid = e.pointerId; stick.setPointerCapture(sid); const r = stick.getBoundingClientRect(); c0 = { x: r.left + r.width / 2, y: r.top + r.height / 2, R: r.width / 2 }; move(e); });
+    stick.addEventListener('pointermove', e => { if (e.pointerId === sid) move(e); });
+    const end = () => { sid = null; keys.stick = null; knob.style.transform = ''; };
+    stick.addEventListener('pointerup', end); stick.addEventListener('pointercancel', end);
+    const hold = (id, down, up = () => {}) => { const b = $(id); b.addEventListener('pointerdown', e => { e.preventDefault(); this.sfx.ensure(); down(); }); b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up); };
+    hold('t-attack', () => this.adv.attack());
+    hold('t-use', () => this.adv.interact());
+    hold('t-jump', () => { keys.Space = true; }, () => { keys.Space = false; });
   }
 
   focusTile(tx, ty) { const [x, z] = tileToWorld(tx, ty); this.cam.focus(x, z); }
@@ -486,6 +551,9 @@ class Game {
     this.confetti(raw * (this.speed ? 1 : 0));
     this.cam.update(raw, !!document.querySelector('.screen.active'));
     this.dayNight(raw);
+    this.world.lod(this.cam.target, this.cam.zoom, this.quality, this.camera.position);
+    this.viewRange();
+    if (this.autoQuality) this.measure(raw);
     this.ambience.update(raw);
     this.labelsUpdate();
     if ((this.uiT -= raw) <= 0) {
@@ -533,6 +601,8 @@ $('m-save').onclick = () => { game.save(); show('none'); game.setSpeed(game.prev
 $('m-help').onclick = () => show('help');
 const soundLabel = () => { $('m-sound').textContent = game.sfx.muted ? '🔇 Sound: off' : '🔊 Sound: on'; };
 $('m-sound').onclick = () => { game.sfx.setMuted(!game.sfx.muted); soundLabel(); }; soundLabel();
+$('m-quality').onclick = () => { game.applyQuality({ low: 'medium', medium: 'high', high: 'low' }[game.quality]); game.autoQuality = false; };
+game.applyQuality(game.quality, false);
 $('m-title').onclick = () => { game.save(true); titleScreen(); };
 $('b-sandbox').onclick = () => { show('none'); game.setSpeed(1); };
 $('b-victitle').onclick = () => titleScreen();

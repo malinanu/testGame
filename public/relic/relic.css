@@ -5,7 +5,7 @@
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; overflow: hidden; background: #2b3a2a; color: #fff6e0; font-family: system-ui, 'Segoe UI', Roboto, sans-serif; user-select: none; }
-#c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+#c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
 .hidden { display: none !important; }
 kbd { background: #0004; border: 1px solid #fff4; border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; font: 600 11px system-ui, sans-serif; color: #fff; }
 .btn { font: 600 15px system-ui, sans-serif; color: #fff6e0; background: linear-gradient(#5a3d24, #3a2614); border: 1px solid #c9a24a88; padding: 8px 14px; border-radius: 9px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; justify-content: center; }
@@ -144,7 +144,7 @@ kbd { background: #0004; border: 1px solid #fff4; border-bottom-width: 2px; bord
 .trade td { padding: 3px 2px; border-bottom: 1px dashed #0002; }
 .trade button { font-size: 11px; padding: 2px 6px; border-radius: 6px; border: 1px solid #0003; background: #fff8; cursor: pointer; }
 
-#modehint { position: absolute; top: 64px; left: 50%; transform: translateX(-50%); background: #000c; border: 1px solid var(--brass); padding: 7px 16px; border-radius: 14px; font-size: 14px; pointer-events: none !important; text-align: center; max-width: 80vw; }
+#modehint { position: absolute; top: 64px; left: 50%; transform: translateX(-50%); background: #000c; border: 1px solid var(--brass); padding: 7px 16px; border-radius: 14px; font-size: 14px; text-align: center; max-width: 80vw; }
 #modehint .err { color: var(--bad); font-weight: 700; }
 #tip { position: fixed; pointer-events: none !important; z-index: 50; display: none; max-width: 300px; background: linear-gradient(#f3e6c8, #e6d3a6); color: var(--ink); border: 2px solid var(--brass); border-radius: 10px; padding: 8px 10px; font-size: 13px; line-height: 1.4; box-shadow: 0 6px 16px #0009; }
 #tip b { font-size: 14px; }
@@ -185,3 +185,21 @@ canvas.chart { width: 100%; height: auto; background: #f3e6c8; border-radius: 10
 .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; margin: 6px 0; }
 .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
 #statsbody { max-height: 60vh; overflow-y: auto; }
+
+#mh-x { margin-left: 8px; font: 700 14px system-ui; color: #fff; background: #a03a2a; border: 1px solid #fff5; border-radius: 8px; padding: 2px 9px; cursor: pointer; }
+body.touch #mh-x { padding: 6px 14px; font-size: 16px; }
+
+/* touch: hero joystick + action buttons (only in hero mode on touch screens) */
+#touchpad { display: none; }
+body.touch.heromode #touchpad { display: block; }
+body.touch #herohud .hk { display: none; }
+body.touch.heromode #herohud { bottom: auto; top: 64px; }
+#stick { position: absolute; left: 22px; bottom: 26px; width: 132px; height: 132px; border-radius: 50%; background: #0005; border: 2px solid #fff5; touch-action: none; }
+#stick i { position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; margin: -28px 0 0 -28px; border-radius: 50%; background: radial-gradient(#fff8, #fff3); border: 2px solid #fffa; pointer-events: none; }
+#tbtns { position: absolute; right: 16px; bottom: 92px; display: grid; grid-template-columns: 70px 70px; gap: 10px; justify-items: center; }
+#tbtns #t-attack { grid-column: span 2; order: 3; }
+body.touch.heromode #quest { display: none; }
+#tbtns button { width: 70px; height: 70px; border-radius: 50%; border: 2px solid #fff6; background: #0007; color: #fff; font-size: 26px; display: flex; flex-direction: column; align-items: center; justify-content: center; touch-action: none; }
+#tbtns button small { font: 600 10px system-ui; }
+#tbtns #t-attack { width: 88px; height: 88px; background: linear-gradient(#a03a2a, #5a1d12); font-size: 32px; }
+body.touch .tbtn, body.touch .tool { min-height: 44px; }

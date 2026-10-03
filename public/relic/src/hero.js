@@ -120,6 +120,7 @@ export class Hero {
     this.cdLeft = Math.max(0, this.cdLeft - dt); this.invuln = Math.max(0, this.invuln - dt);
     let mx = 0, mz = 0;
     if (active) { mx = (input.KeyD ? 1 : 0) - (input.KeyA ? 1 : 0); mz = (input.KeyS ? 1 : 0) - (input.KeyW ? 1 : 0); }
+    if (active && input.stick) { mx += input.stick.x; mz += input.stick.z; } // touch joystick
     const len = Math.hypot(mx, mz), attacking = this.actor.busy > 0 && this.attacking;
     if (!(this.actor.busy > 0)) this.attacking = false;
     if (len > 0) {

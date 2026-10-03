@@ -46,6 +46,17 @@ An Anno 1800-style city builder set in an uncharted forest valley, with an adven
 - **Gold** is taxes minus upkeep, shown per minute in the top bar. A Trading Post brings caravans to buy and sell goods.
 - **Territory and fog.** You can build inside the Town Hall's radius, and Outposts extend it. Land outside is fogged
   until your hero or a building reveals it.
+- **Difficulty.** Relaxed, Settler or Pioneer, chosen on the new-colony screen. It scales starting gold, upkeep,
+  taxes, raid timing and fire. Every map gets the same guarantees: a grove, rock and an iron deposit near the start.
+  A founding grant halves upkeep until the colony first reaches 40 residents.
+- **Paved roads** (P) cost 1 Brick + 2 gold per tile, and carriers walk them 50% faster. Drag over dirt roads to pave them.
+- **Statistics** (O or 📊): goods made and used per minute with sparklines and deficit warnings, population per
+  tier, and a finance chart.
+- **Festivals** at the Town Hall: +25 happiness for 3 minutes, with a cooldown.
+- **Expeditions** from the Cartographer: spend a map, food and gold to chart deposits or lairs or to bring back loot.
+- **A living town.** Villagers stroll between homes and the market, tavern and chapel. Lumberjacks walk out and chop
+  the trees they fell, and workers hammer, saw and haul beside busy workshops. New buildings go up behind scaffolding.
+  Windows glow at night, and there is ambient sound (birds, crickets, work sounds near the camera).
 
 **The adventure**
 - Press **H** for the hero (action-RPG camera: WASD, click to attack with auto-aim, E to open chests or pick up relics).
@@ -63,9 +74,15 @@ An Anno 1800-style city builder set in an uncharted forest valley, with an adven
 
 **Controls**
 - Camera: WASD or edge scroll to pan, the wheel to zoom (it tilts from street view to overview), Q/E or right-drag to rotate.
-- Building: pick a card in the build menu, then click to place. R paints roads, X demolishes.
+- Building: pick a card in the build menu, then click to place. R paints roads, P paves them, X demolishes, and C over
+  a building places another of the same type.
 - Space pauses, and 1/2/3 set the game speed. M toggles the minimap.
 - The game autosaves every minute and when you leave. **Continue** restores the colony.
+- **Touch screens:** one finger pans, pinch zooms, and a two-finger twist rotates. Tap to select or place, and drag
+  to paint roads. ✕ stops the current tool. In hero mode a joystick and Attack / Use / Jump buttons appear.
+- **Graphics** (menu): Low, Medium or High sets the pixel ratio, shadow quality, decor, shadow casters, view
+  distance, and (on Low) a lighter tree model for distant forest chunks. If the first seconds run under 25 fps,
+  the game drops to Low by itself.
 
 **Code** (`public/relic/src`, the simulation is DOM-free and tested in Node)
 - `data.js`: goods, buildings, tiers, relics, lairs and quests
@@ -73,14 +90,25 @@ An Anno 1800-style city builder set in an uncharted forest valley, with an adven
 - `sim.js`: the deterministic colony simulation (fixed step, save/load)
 - `kit.js`: builds every building from Dungeon walls, floors and props plus Resource and Tool pieces, with
   procedural roofs, fields and canopies, then merges the geometry per material
-- `world3d.js`: terrain, water, the instanced forest, roads, fog and territory overlay, lairs and deposits
+- `world3d.js`: terrain, water, the instanced forest (in 24×24-tile chunks, so off-screen chunks are culled), dirt
+  and paved roads, fog and territory overlay, lairs and deposits, and level of detail
 - `camera.js`: the RTS camera and the hero camera
-- `units.js`: the carriers
+- `units.js`: carriers, strolling villagers, lumberjacks, builders and site workers
+- `ambience.js`: birdsong, crickets and positional work sounds from the WebAudio synth
 - `hero.js`: the Founder, creatures, raids and relics
 - `ui.js`: the HUD, build menu with rendered thumbnails, inspector and minimap
 - `main.js`: glue, input modes, day/night, VFX and save
-- `tests/colony.test.mjs` covers the map, placement, logistics, chains, workforce, needs and tiers, relics, raids,
-  trade and save/load. A scripted bot (`tests/colony-bot.mjs`) plays two seeds to victory: about 80 and 120 game minutes.
+- `tests/colony.test.mjs` covers:
+  - map fairness over 50 seeds
+  - difficulty and the founding grant
+  - placement, logistics and paved roads
+  - chains, workforce, needs and tiers
+  - relics, raids and trade
+  - festivals, expeditions and statistics
+  - save/load
+
+  A scripted bot (`tests/colony-bot.mjs`) plays seeds 1–8 on Settler and must win at least 7. It currently wins 8/8,
+  in about 70 game minutes.
 
 ## Wizard's Chess (`public/chess/`)
 Full-rules chess on a cracked stone board in a torch-lit hall.
@@ -186,7 +214,7 @@ Run `npm test`. It covers:
 - Versus play: two-sided turns, per-side flasks, lockstep determinism, and online duels between two in-process clients (room code, lost-message repair, a full room, rematch, quick-match pairing)
 - The arena server core: economy, validation, daily streak, harvest and craft, upgrades, raids with server replay, forged logs, PvP Elo, simulated defenses, season rollover
 - The Supabase store, against an in-memory fake of supabase-js
-- Wildwood Colony: simulation unit tests plus two full bot playthroughs
+- Wildwood Colony: simulation unit tests, 50-seed map fairness and eight bot playthroughs
 - Whether `_shared` is in sync with `public/`
 
 ## Wildwood Tactics

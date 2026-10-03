@@ -21,21 +21,58 @@ export class RTSCamera {
       if (this.mode === 'rts') this.zoomGoal = THREE.MathUtils.clamp(this.zoomGoal + e.deltaY * 0.0009, 0, 1);
       else this.heroDist = THREE.MathUtils.clamp(this.heroDist + e.deltaY * 0.008, 7, 24);
     }, { passive: true });
-    dom.addEventListener('pointerdown', e => { if (e.button === 1 || e.button === 2) this.drag = { x: e.clientX, y: e.clientY, b: e.button }; });
-    addEventListener('pointerup', () => { this.drag = null; });
+    // touch: one finger pans (or turns the hero camera), two fingers pinch-zoom and twist-rotate
+    this.touches = new Map(); this.gesture = false; this.canPan = () => true;
+    dom.addEventListener('pointerdown', e => {
+      if (e.pointerType === 'touch') {
+        if (!this.touches.size) this.gesture = false;
+        this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY });
+        if (this.touches.size > 1) this.gesture = true;
+        this.pinch = null;
+        return;
+      }
+      if (e.button === 1 || e.button === 2) this.drag = { x: e.clientX, y: e.clientY, b: e.button };
+    });
+    const lift = e => { if (e.pointerType === 'touch') { this.touches.delete(e.pointerId); this.pinch = null; } else this.drag = null; };
+    addEventListener('pointerup', lift); addEventListener('pointercancel', lift);
     addEventListener('pointermove', e => {
+      if (e.pointerType === 'touch') { this.touchMove(e); return; }
       if (this.drag) {
         const dx = e.clientX - this.drag.x, dy = e.clientY - this.drag.y; this.drag.x = e.clientX; this.drag.y = e.clientY;
         if (this.mode === 'rts') { this.yawGoal -= dx * 0.006; this.yaw = this.yawGoal; this.zoomGoal = THREE.MathUtils.clamp(this.zoomGoal + dy * 0.002, 0, 1); }
         else { this.heroYaw -= dx * 0.006; this.heroPitch = THREE.MathUtils.clamp(this.heroPitch + dy * 0.004, 0.45, 1.25); }
       }
       
+      if (e.pointerType !== 'mouse') return;
       const m = 6;
       this.edge.x = e.clientX < m ? -1 : e.clientX > innerWidth - m ? 1 : 0;
       this.edge.y = e.clientY < m ? -1 : e.clientY > innerHeight - m ? 1 : 0;
     });
     dom.addEventListener('pointerleave', () => { this.edge = { x: 0, y: 0 }; });
     dom.addEventListener('contextmenu', e => e.preventDefault());
+  }
+
+  touchMove(e) {
+    const t = this.touches.get(e.pointerId); if (!t) return;
+    const dx = e.clientX - t.x, dy = e.clientY - t.y; t.x = e.clientX; t.y = e.clientY;
+    if (this.touches.size === 1) {
+      if (Math.hypot(t.x - t.x0, t.y - t.y0) > 12) this.gesture = true;
+      if (!this.gesture || !this.canPan()) return;
+      if (this.mode === 'hero') { this.heroYaw -= dx * 0.008; this.heroPitch = THREE.MathUtils.clamp(this.heroPitch + dy * 0.005, 0.45, 1.25); return; }
+      // drag the ground under the finger: world units per pixel at the current distance
+      const k = this.dist * 1.15 / innerHeight, s = Math.sin(this.yaw), c = Math.cos(this.yaw), mx = -dx * k, mz = -dy * k / Math.max(0.5, Math.sin(this.pitch));
+      this.goal.x += mx * c + mz * s; this.goal.z += -mx * s + mz * c; this.target.copy(this.goal);
+      return;
+    }
+    const [a, b] = [...this.touches.values()], d = Math.hypot(a.x - b.x, a.y - b.y), ang = Math.atan2(b.y - a.y, b.x - a.x);
+    if (this.pinch) {
+      if (this.mode === 'rts') {
+        this.zoomGoal = THREE.MathUtils.clamp(this.zoomGoal - (d - this.pinch.d) * 0.0025, 0, 1);
+        let da = ang - this.pinch.ang; if (da > Math.PI) da -= Math.PI * 2; if (da < -Math.PI) da += Math.PI * 2;
+        this.yawGoal += da; this.yaw = this.yawGoal;
+      } else this.heroDist = THREE.MathUtils.clamp(this.heroDist - (d - this.pinch.d) * 0.03, 7, 24);
+    }
+    this.pinch = { d, ang };
   }
 
   get dist() { return lerp(16, 120, this.zoom ** 1.15); }

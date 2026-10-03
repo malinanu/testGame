@@ -52,6 +52,21 @@ jobs:
             exit 1
           fi
 
+      - name: Test SSH Connection and Permissions
+        env:
+          SSH_KEY: ${{ secrets.CLOUDPANEL_SSH_KEY }}
+          SSH_USER: ${{ secrets.CLOUDPANEL_USER }}
+          SSH_HOST: ${{ secrets.CLOUDPANEL_HOST }}
+          SSH_PORT: ${{ secrets.CLOUDPANEL_PORT || '22' }}
+        run: |
+          mkdir -p ~/.ssh
+          printf "%s\n" "$SSH_KEY" > ~/.ssh/test_key
+          chmod 600 ~/.ssh/test_key
+          echo "Verifying SSH Key structure..."
+          ssh-keygen -l -f ~/.ssh/test_key
+          echo "Attempting verbose SSH connection..."
+          ssh -vvv -o StrictHostKeyChecking=no -p "$SSH_PORT" -i ~/.ssh/test_key "$SSH_USER@$SSH_HOST" "echo 'SUCCESS: Connected as user:' \$(whoami) && pwd"
+
       - name: Deploy to CloudPanel via rsync
         uses: easingthemes/ssh-deploy@v5.0.3
         with:

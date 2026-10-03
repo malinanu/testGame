@@ -301,7 +301,7 @@ All four games share the loader and character code, so these apply everywhere:
   | Tactics | 133 → 43 | 6.2 → 3.5 MB |
   | Chess | 111 → 85 | 7.9 → 5.8 MB |
 
-  Measured in headless Chromium. Re-run `npm run pack` after changing any model.
+  Measured in headless Chromium. Re-run `npm run pack` after changing any model. The first time, run `npm install` for the packing tools. The packed files are committed, so you don't need this just to play.
 - **Loading.** `THREE.Cache` is on, and each pack's texture atlas is decoded and uploaded once, not once per model
   file. In the colony this cuts GPU textures from 171 to 36 and load time from about 12 s to 3 s (headless test).
 - **Characters.** The 7–9 skinned parts of each KayKit character are merged into one mesh at load, so each

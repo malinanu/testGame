@@ -3,8 +3,9 @@
 // chunk directly: no dependencies.
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
-const A = new URL('../public/assets/', import.meta.url).pathname;
+const A = fileURLToPath(new URL('../public/assets/', import.meta.url)); // a real path on Windows too
 const glbJson = file => {
   const b = readFileSync(file);
   assert.equal(b.readUInt32LE(0), 0x46546c67, `${file} is a GLB`);

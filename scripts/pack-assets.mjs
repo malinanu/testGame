@@ -7,10 +7,18 @@
 import { readdirSync, mkdirSync, statSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { NodeIO } from '@gltf-transform/core';
-import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
-import { mergeDocuments, dedup, prune, weld, meshopt, unpartition } from '@gltf-transform/functions';
-import { MeshoptEncoder } from 'meshoptimizer';
+// the packing tools are devDependencies: give a clear hint instead of a module-resolution stack trace
+let NodeIO, ALL_EXTENSIONS, mergeDocuments, dedup, prune, weld, meshopt, unpartition, MeshoptEncoder;
+try {
+  ({ NodeIO } = await import('@gltf-transform/core'));
+  ({ ALL_EXTENSIONS } = await import('@gltf-transform/extensions'));
+  ({ mergeDocuments, dedup, prune, weld, meshopt, unpartition } = await import('@gltf-transform/functions'));
+  ({ MeshoptEncoder } = await import('meshoptimizer'));
+} catch {
+  console.error('The packing tools are not installed. Run `npm install` once, then `npm run pack` again.\n' +
+    '(You only need this after changing models: the packed files in public/assets/packs are already in the repo.)');
+  process.exit(1);
+}
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..'), assets = join(root, 'public/assets');
 const PACKS = ['dungeon', 'resources', 'tools', 'forest', 'props'];

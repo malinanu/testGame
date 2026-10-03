@@ -1,0 +1,291 @@
+// Authoritative game logic for Wildwood Arena. Runs in the Supabase Edge Function (real cloud)
+// and in the browser's local mock backend. Storage is abstracted behind `store` (see store-memory.js).
+import { CLASSES, CLASS_KEYS } from '../../tactics/src/data.js';
+import { Battle } from '../../tactics/src/battle.js';
+import * as E from './economy.js';
+import { validate, buildRaid, defaultStronghold, botStronghold, BOT_COUNT, BEHAVIORS } from './stronghold.js';
+
+export class GameError extends Error {}
+const fail = msg => { throw new GameError(msg); };
+
+export const botId = i => `00000000-0000-4000-8000-${String(i + 1).padStart(12, '0')}`;
+const DAY = 864e5, HOUR = 36e5;
+const RAID_COOLDOWN = 6 * HOUR, RAID_EXPIRY = HOUR, DEFENSE_SIM_EVERY = 3 * HOUR;
+
+function newProfile(id, name, now, extra = {}) {
+  return {
+    id, name, isBot: false, rating: E.START.rating, peak: E.START.rating, gold: E.START.gold,
+    herbs: E.START.herbs, berries: E.START.berries, harvestedAt: now - 2 * HOUR, level: 1,
+    tiers: Object.fromEntries(CLASS_KEYS.map(k => [k, 0])), consumables: { potion: 1, ale: 0, tonic: 0 },
+    aura: null, wins: 0, losses: 0, defWins: 0, defLosses: 0, lastDaily: null, streak: 0, lastSim: now, createdAt: now, ...extra,
+  };
+}
+
+const snapshotGarrison = (garrison, tiers) => garrison.map(d => ({ cls: d.cls, behavior: d.behavior, x: d.x, y: d.y, tier: tiers[d.cls] || 0 }));
+const dayKey = t => new Date(t).toISOString().slice(0, 10);
+
+export function createCore(store) {
+  const now = () => store.now();
+
+  async function ensureWorld() {
+    let s = await store.getSeason();
+    if (!s) { s = { id: 1, starts: now(), ends: now() + E.SEASON_DAYS * DAY }; await store.putSeason(s); }
+    else if (now() > s.ends) s = await closeSeason(s);
+    if (!(await store.getProfile(botId(BOT_COUNT - 1)))) {
+      for (let i = 0; i < BOT_COUNT; i++) {
+        const b = botStronghold(i), id = botId(i);
+        await store.putProfile(newProfile(id, b.name, now(), { isBot: true, rating: b.rating, peak: b.rating, level: b.level }));
+        await store.putStronghold({ owner: id, version: 1, layout: b.layout, garrison: b.garrison, updatedAt: now() });
+      }
+    }
+    return s;
+  }
+
+  async function closeSeason(s) {
+    for (const p of await store.allProfiles()) {
+      if (p.isBot) continue;
+      const peak = E.league(p.peak);
+      if (peak.min > 0) p.aura = peak.name; // cosmetic aura for reaching Silver+
+      p.rating = E.seasonReset(p.rating); p.peak = p.rating;
+      await store.putProfile(p);
+    }
+    const next = { id: s.id + 1, starts: now(), ends: now() + E.SEASON_DAYS * DAY };
+    await store.putSeason(next);
+    return next;
+  }
+
+  async function mustProfile(uid) { return (await store.getProfile(uid)) || fail('No profile yet: pick a name first.'); }
+
+  async function state(p, extra = {}) {
+    const sh = await store.getStronghold(p.id);
+    const log = (await store.raidsAgainst(p.id, 8)).map(r => ({
+      at: r.finishedAt, attacker: r.attackerName, held: r.result !== 'win', delta: r.deltas?.defender ?? 0,
+    }));
+    return {
+      profile: p, stronghold: sh, pending: sh ? E.pendingHarvest(sh.layout, p.harvestedAt, now()) : null,
+      league: E.league(p.rating), season: await store.getSeason(), defenseLog: log, now: now(), ...extra,
+    };
+  }
+
+  /** NPC guilds raid players while they are away, so defenses matter. */
+  async function simulateDefense(p) {
+    if (now() - p.lastSim < DEFENSE_SIM_EVERY) return null;
+    p.lastSim = now();
+    const sh = await store.getStronghold(p.id);
+    if (!sh) return null;
+    const bots = (await store.bots()).sort((a, b) => Math.abs(a.rating - p.rating) - Math.abs(b.rating - p.rating));
+    const bot = bots[Math.floor((p.lastSim / 1000) % Math.min(3, bots.length))];
+    const seed = Math.floor(Math.random() * 2 ** 31);
+    const party = Array.from({ length: 4 }, (_, i) => CLASS_KEYS[(seed >> (i * 3)) % 6]);
+    const tier = Math.max(0, Math.min(4, Math.floor((bot.rating - 900) / 170)));
+    const attack = { party, tiers: Object.fromEntries(CLASS_KEYS.map(k => [k, tier])), consumables: {}, aura: null };
+    const defense = { layout: sh.layout, garrison: sh.garrison, aura: p.aura };
+    const setup = buildRaid({ attack, defense, seed });
+    const b = new Battle({ grid: setup.grid, units: setup.units, ...setup.opts });
+    while (!b.over) { await b.runAI('player'); if (!b.over) await b.endPlayerTurn(); }
+    const won = b.result === 'win', d = E.eloDelta(bot.rating, p.rating, won);
+    p.rating = Math.max(0, p.rating + d.defender); p.peak = Math.max(p.peak, p.rating);
+    if (won) p.defLosses++; else { p.defWins++; p.gold += E.DEFENSE_REWARD; }
+    const raid = {
+      id: store.newId(), attacker: bot.id, defender: p.id, attackerName: bot.name, defenderName: p.name, status: 'done', seed,
+      attack, defense: { ...defense, version: sh.version }, result: b.result, deltas: { attacker: 0, defender: d.defender },
+      rounds: b.round, createdAt: now(), finishedAt: now(), simulated: true,
+    };
+    await store.putRaid(raid);
+    return { attacker: bot.name, held: !won, delta: d.defender };
+  }
+
+  const actions = {
+    async me(uid) {
+      await ensureWorld();
+      const p = await store.getProfile(uid);
+      if (!p) return { profile: null };
+      const extra = {};
+      const today = dayKey(now());
+      if (p.lastDaily !== today) {
+        p.streak = p.lastDaily === dayKey(now() - DAY) ? p.streak + 1 : 1;
+        p.lastDaily = today;
+        extra.daily = { gold: E.dailyBonus(p.streak), streak: p.streak };
+        p.gold += extra.daily.gold;
+      }
+      const def = await simulateDefense(p);
+      if (def) extra.defense = def;
+      await store.putProfile(p);
+      return state(p, extra);
+    },
+
+    async register(uid, { name } = {}) {
+      await ensureWorld();
+      const existing = await store.getProfile(uid);
+      if (existing) return state(existing);
+      const clean = String(name || '').replace(/[^\p{L}\p{N} _'-]/gu, '').trim().slice(0, 20);
+      if (clean.length < 2) fail('Pick a name of at least 2 letters.');
+      const p = newProfile(uid, clean, now());
+      const d = defaultStronghold();
+      await store.putProfile(p);
+      await store.putStronghold({ owner: uid, version: 1, layout: d.layout, garrison: snapshotGarrison(d.garrison, p.tiers), updatedAt: now() });
+      return actions.me(uid);
+    },
+
+    async saveStronghold(uid, { layout, garrison } = {}) {
+      const p = await mustProfile(uid);
+      const errs = validate(layout, garrison, p.level);
+      if (errs.length) fail(errs.join(' '));
+      const old = await store.getStronghold(uid);
+      await store.putStronghold({ owner: uid, version: (old?.version || 0) + 1, layout: { tiles: layout.tiles.map(Number) }, garrison: snapshotGarrison(garrison, p.tiers), updatedAt: now() });
+      return state(p);
+    },
+
+    async upgradeGear(uid, { cls } = {}) {
+      const p = await mustProfile(uid);
+      if (!CLASSES[cls]) fail('Unknown class.');
+      const tier = p.tiers[cls] || 0, cost = E.upgradeCost(tier);
+      if (cost == null) fail('Already Legendary.');
+      if (p.gold < cost) fail(`Need ${cost} gold.`);
+      p.gold -= cost; p.tiers[cls] = tier + 1;
+      await store.putProfile(p);
+      const sh = await store.getStronghold(uid);
+      if (sh) { sh.garrison = snapshotGarrison(sh.garrison, p.tiers); await store.putStronghold(sh); }
+      return state(p);
+    },
+
+    async upgradeStronghold(uid) {
+      const p = await mustProfile(uid);
+      if (p.level >= E.MAX_LEVEL) fail('Stronghold is at max level.');
+      const cost = E.LEVEL_COST[p.level];
+      if (p.gold < cost) fail(`Need ${cost} gold.`);
+      p.gold -= cost; p.level++;
+      await store.putProfile(p);
+      return state(p);
+    },
+
+    async harvest(uid) {
+      const p = await mustProfile(uid), sh = await store.getStronghold(uid);
+      const got = E.pendingHarvest(sh.layout, p.harvestedAt, now());
+      p.herbs += got.herbs; p.berries += got.berries; p.harvestedAt = now();
+      // two harvests sent at once must not both pay out
+      if (store.putProfileIf ? !(await store.putProfileIf(p)) : (await store.putProfile(p), false)) fail('Busy, try again.');
+      return state(p, { harvested: got });
+    },
+
+    async craft(uid, { recipe } = {}) {
+      const p = await mustProfile(uid), r = E.RECIPES[recipe] || fail('Unknown recipe.');
+      if ((p.consumables[recipe] || 0) >= 9) fail('Your satchel is full of those.');
+      if ((r.cost.herbs || 0) > p.herbs || (r.cost.berries || 0) > p.berries) fail('Not enough herbs or berries.');
+      p.herbs -= r.cost.herbs || 0; p.berries -= r.cost.berries || 0;
+      p.consumables[recipe] = (p.consumables[recipe] || 0) + 1;
+      await store.putProfile(p);
+      return state(p);
+    },
+
+    async findTarget(uid, { skip = [] } = {}) {
+      await ensureWorld();
+      const p = await mustProfile(uid);
+      const recent = new Set(await store.recentTargets(uid, now() - RAID_COOLDOWN));
+      const pool = (await store.nearby(p.rating, 40)).filter(o => o.id !== uid && !skip.includes(o.id) && !recent.has(o.id));
+      if (!pool.length) fail('No strongholds left to raid right now — check back later.');
+      const near = pool.filter(o => Math.abs(o.rating - p.rating) <= 250);
+      const list = (near.length ? near : pool).sort((a, b) => Math.abs(a.rating - p.rating) - Math.abs(b.rating - p.rating));
+      const t = list[Math.floor(Math.random() * Math.min(3, list.length))];
+      const sh = await store.getStronghold(t.id);
+      return {
+        id: t.id, name: t.name, rating: t.rating, league: E.league(t.rating), level: t.level, isBot: t.isBot, aura: t.aura,
+        garrison: sh.garrison.map(d => ({ cls: d.cls, behavior: d.behavior, tier: d.tier })),
+        winDelta: E.eloDelta(p.rating, t.rating, true).attacker, lossDelta: E.eloDelta(p.rating, t.rating, false).attacker,
+        reward: E.raidRewards(true, t.rating, t.level),
+      };
+    },
+
+    async startRaid(uid, { defenderId, party, consumables = {} } = {}) {
+      const p = await mustProfile(uid);
+      if (!Array.isArray(party) || party.length !== 4 || party.some(c => !CLASSES[c])) fail('Pick a raiding party of 4.');
+      if (defenderId === uid) fail('You cannot raid yourself.');
+      const def = await store.getProfile(defenderId), sh = await store.getStronghold(defenderId);
+      if (!def || !sh) fail('That stronghold is gone.');
+      const open = await store.openRaidOf(uid);
+      // the same request twice (double click, retry): hand back the raid just opened instead of forfeiting it
+      if (open && open.defender === defenderId && now() - open.createdAt < 15000) return { raid: publicRaid(open), league: E.league(def.rating) };
+      if (open) await resolve(open, null, 'abandoned');
+      const cons = {};
+      for (const k of Object.keys(E.RAID_CARRY)) {
+        const n = Math.max(0, Math.min(E.RAID_CARRY[k], consumables[k] | 0));
+        if (n > (p.consumables[k] || 0)) fail(`You don't have enough ${E.RECIPES[k].name}.`);
+        cons[k] = n; p.consumables[k] -= n;
+      }
+      await store.putProfile(p);
+      const raid = {
+        id: store.newId(), attacker: uid, defender: def.id, attackerName: p.name, defenderName: def.name, status: 'open',
+        seed: Math.floor(Math.random() * 2 ** 31), createdAt: now(),
+        attack: { party, tiers: { ...p.tiers }, consumables: cons, aura: p.aura },
+        defense: { layout: sh.layout, garrison: sh.garrison, aura: def.aura, version: sh.version },
+        ratings: { attacker: p.rating, defender: def.rating }, defenderLevel: def.level,
+      };
+      await store.putRaid(raid);
+      return { raid: publicRaid(raid), league: E.league(def.rating) };
+    },
+
+    async finishRaid(uid, { raidId, actions: log } = {}) {
+      const raid = await store.getRaid(raidId);
+      if (!raid || raid.attacker !== uid) fail('Unknown raid.');
+      if (raid.status !== 'open') fail('This raid is already settled.');
+      if (!Array.isArray(log) || log.length > 3000) fail('Bad raid log.');
+      const expired = now() - raid.createdAt > RAID_EXPIRY;
+      return resolve(raid, expired ? null : log, expired ? 'expired' : null);
+    },
+
+    async leaderboard(uid) {
+      const p = await store.getProfile(uid);
+      const top = (await store.top(50)).map(o => ({ id: o.id, name: o.name, rating: o.rating, league: E.league(o.rating).name, aura: o.aura, isBot: o.isBot, wins: o.wins, defWins: o.defWins }));
+      return { top, me: p ? { rank: (await store.rankOf(p.rating)) + 1, rating: p.rating } : null, season: await store.getSeason() };
+    },
+  };
+
+  /** Replays the raid server-side and settles rewards + Elo. `log` null = forfeit. */
+  async function resolve(raid, log, reason) {
+    // settle each raid exactly once, even if the same finish request arrives twice in parallel
+    if (store.claimRaid && !(await store.claimRaid(raid.id))) fail('This raid is already settled.');
+    try { return await settle(raid, log, reason); }
+    catch (e) { await store.releaseRaid?.(raid.id); throw e; }
+  }
+  async function settle(raid, log, reason) {
+    let result = 'lose', rounds = 0, valid = true;
+    if (log) {
+      const setup = buildRaid({ attack: raid.attack, defense: raid.defense, seed: raid.seed });
+      const b = new Battle({ grid: setup.grid, units: setup.units, ...setup.opts });
+      valid = await b.replay(log);
+      result = valid && b.over ? b.result : 'lose';
+      rounds = b.round;
+      if (!valid) reason = 'invalid';
+      else if (!b.over) reason = 'retreated';
+    }
+    const att = await store.getProfile(raid.attacker), def = await store.getProfile(raid.defender);
+    const won = result === 'win', d = E.eloDelta(att.rating, def.rating, won), rew = E.raidRewards(won, def.rating, raid.defenderLevel || def.level);
+    att.rating = Math.max(0, att.rating + d.attacker); att.peak = Math.max(att.peak, att.rating);
+    att.gold += rew.gold; att.herbs += rew.herbs; att.berries += rew.berries;
+    won ? att.wins++ : att.losses++;
+    await store.putProfile(att);
+    if (!def.isBot) {
+      def.rating = Math.max(0, def.rating + d.defender); def.peak = Math.max(def.peak, def.rating);
+      if (won) def.defLosses++; else { def.defWins++; def.gold += E.DEFENSE_REWARD; }
+      await store.putProfile(def);
+    }
+    Object.assign(raid, { status: 'done', result, reason: reason || null, rounds, deltas: { attacker: d.attacker, defender: def.isBot ? 0 : d.defender }, rewards: rew, finishedAt: now(), actions: log ? log.length : 0 });
+    await store.putRaid(raid);
+    return { result, reason: reason || null, rewards: rew, ratingDelta: d.attacker, rounds, ...(await state(att)) };
+  }
+
+  const publicRaid = r => ({ id: r.id, seed: r.seed, attack: r.attack, defense: r.defense, attackerName: r.attackerName, defenderName: r.defenderName, ratings: r.ratings });
+
+  return {
+    actions,
+    async handle(uid, action, payload) {
+      if (!uid) return { error: 'Not signed in.' };
+      const fn = actions[action];
+      if (!fn) return { error: `Unknown action ${action}` };
+      try { return await fn(uid, payload || {}); }
+      catch (e) { if (e instanceof GameError) return { error: e.message }; throw e; }
+    },
+  };
+}
+
+export { BEHAVIORS };

@@ -1,0 +1,11 @@
+{
+  "name": "kaykit-forest-games",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "npx serve public",
+    "test": "node tests/chess.test.mjs && node tests/engine.test.mjs && node tests/tutorial.test.mjs && node tests/pvp.test.mjs && node tests/colony.test.mjs && node tests/arena.test.mjs && node tests/store-supabase.test.mjs && node tests/function-bundle.test.mjs && node scripts/sync-shared.mjs --check",
+    "sync": "node scripts/sync-shared.mjs",
+    "bundle": "node scripts/sync-shared.mjs && npx -y esbuild@0.24.0 supabase/functions/arena/index.ts --bundle --format=esm --platform=neutral --target=es2022 --external:'npm:*' --outfile=dist/arena-function.ts"
+  }
+}

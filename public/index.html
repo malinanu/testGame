@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wildwood Games</title>
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+
+<section id="hub" class="screen">
+  <header class="logo"><div class="crest">🌲</div><h1>Wildwood</h1><p>Game Collection · four games in one forest</p></header>
+  <nav class="tiles" id="tiles">
+    <a class="tile" href="relic/" data-game="relic"><div class="art" style="background-image:url(assets/ui/game-relic.webp)"><span class="tag act">Builder</span><span class="tag new">Adventure</span></div>
+      <div class="tbody"><b>Forest Relic Hunt</b><span>Build an Anno-style colony in the Wildwood, grow your town through three tiers and lead your hero to five lost relics.</span><i class="play">▶ PLAY</i></div></a>
+    <a class="tile" href="tactics/" data-game="tactics"><div class="art" style="background-image:url(assets/ui/game-tactics.webp)"><span class="tag tac">Tactics</span><span class="tag new">vs AI · 2P · Online</span></div>
+      <div class="tbody"><b>Wildwood Tactics</b><span>Turn-based squad battles. Campaign, skirmish vs AI, hot-seat, or duel friends online.</span><i class="play">▶ PLAY</i></div></a>
+    <a class="tile" href="arena/" data-game="arena"><div class="art" style="background-image:url(assets/ui/game-arena.webp)"><span class="tag onl">Online</span></div>
+      <div class="tbody"><b>Wildwood Arena</b><span>Build a stronghold, raid other players' bases and climb the league.</span><i class="play">▶ PLAY</i></div></a>
+    <a class="tile" href="chess/" data-game="chess"><div class="art" style="background-image:url(assets/ui/game-chess.webp)"><span class="tag chs">Chess</span></div>
+      <div class="tbody"><b>Wizard's Chess</b><span>A living chess set: pieces march, shoot and cast, and smash each other on capture.</span><i class="play">▶ PLAY</i></div></a>
+  </nav>
+  <p class="foot"><kbd>←</kbd><kbd>→</kbd> choose · <kbd>Enter</kbd> play</p>
+</section>
+
+
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>

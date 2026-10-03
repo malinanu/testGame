@@ -1,12 +1,14 @@
 import { loadAssets, PROPS as BASE_PROPS } from '../../src/assets.js';
-import { CLASSES, CLASS_KEYS, ABIL, ITEMS, TILE, T, maxHpOf } from './data.js';
-import { generateMap, pathTo, dist } from './grid.js';
+import { CLASSES, CLASS_KEYS, ABIL, ITEMS, TILE, T, GUILDS, maxHpOf } from './data.js';
+import { generateMap, pathTo, dist, rng } from './grid.js';
 import { Battle, makeUnit } from './battle.js';
 import { View } from './view.js';
 import { BattleController } from './controller.js';
 import { bindHelp } from './help.js';
 import { runTutorial, TUTORIAL_KEY } from './tutorial.js';
 import * as Run from './run.js';
+import { OnlineMatch, pickTransport, cleanCode } from './net.js';
+import { CONFIG } from '../../arena/config.js';
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -31,17 +33,32 @@ function heroCard(h, extra = '') {
     ${h.alive ? `${h.hp} / ${max} HP` : 'Fallen'}${gear ? `<div class="gear">${esc(gear)}</div>` : ''}${extra}</div>`;
 }
 
+const RECOMMENDED = ['knight', 'ranger', 'wizard', 'barbarian'];
+const DIFF = { easy: { hpMult: 0.8, dmgBonus: -1, name: 'Easy' }, normal: { hpMult: 1, dmgBonus: 0, name: 'Normal' }, hard: { hpMult: 1.25, dmgBonus: 1, name: 'Hard' } };
+const TURN_SECONDS = 90, RETURN_SECONDS = 60;
+const store = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
+const squadNames = list => list.map(k => CLASSES[k].name).join(', ');
+
 class App {
   constructor(view) {
-    this.view = view; this.run = null; this.draft = [];
-    $('btn-new').onclick = () => this.showDraft();
+    this.view = view; this.run = null; this.draft = []; this.diff = store.get('wwt-diff', 'normal');
+    this.transport = pickTransport(CONFIG);
+    const campaign = () => this.showDraft({ title: 'Draft your party', begin: 'Enter the Wildwood', onBegin: list => { this.run = Run.newRun(list); Run.save(this.run); this.showMap(); } });
+    this.campaignDraft = campaign;
+    $('btn-new').onclick = campaign;
     $('btn-learn').onclick = () => this.tutorial();
-    $('btn-tut-run').onclick = () => this.showDraft();
+    $('btn-tut-run').onclick = campaign;
     $('btn-tut-again').onclick = () => this.tutorial();
     $('btn-tut-title').onclick = () => this.showTitle();
-    $('btn-quick').onclick = () => this.pickParty(['knight', 'ranger', 'wizard', 'barbarian']);
+    $('btn-quick').onclick = () => this.pickParty(RECOMMENDED);
     $('btn-continue').onclick = () => { this.run = Run.load(); this.showMap(); };
-    $('btn-begin').onclick = () => { this.run = Run.newRun(this.draft); Run.save(this.run); this.showMap(); };
+    $('btn-begin').onclick = () => this.draftOpts.onBegin([...this.draft]);
+    $('btn-draftback').onclick = () => (this.draftOpts.back || (() => this.showTitle()))();
+    $('o-diff').querySelectorAll('button').forEach(b => { b.onclick = () => { this.diff = b.dataset.v; store.set('wwt-diff', this.diff); this.renderDraft(); }; });
+    $('btn-skirmish').onclick = () => this.skirmishDraft();
+    $('btn-local').onclick = () => this.localDraft();
+    $('btn-online').onclick = () => this.openOnline();
+    this.bindVersus();
     $('btn-again').onclick = () => this.showTitle();
     $('btn-rest').onclick = () => { Run.rest(this.run); this.renderCamp(); };
     $('btn-breakcamp').onclick = () => { this.view.clearCamp(); Run.save(this.run); this.showMap(); };
@@ -57,6 +74,9 @@ class App {
     let seen = false; try { seen = localStorage.getItem(TUTORIAL_KEY) === '1'; } catch {}
     $('newhere').textContent = seen ? '' : '👋 New here? Start with the 2-minute training. It walks you through your first battle.';
     $('btn-learn').classList.toggle('pulse', !seen);
+    $('btn-quit').classList.add('hidden');
+    $('btn-online').disabled = !this.transport;
+    $('onlinenote').textContent = this.transport ? (this.transport.kind === 'local' ? 'Test mode: pairs browser tabs on this computer.' : '') : 'Unavailable: no online server configured.';
     show('title');
   }
 
@@ -76,8 +96,13 @@ class App {
     this.renderDraft();
   }
 
-  showDraft() {
-    this.draft = [];
+  /** opts: { title, begin, onBegin(list), back(), difficulty, preset } */
+  showDraft(opts) {
+    this.draftOpts = opts;
+    $('drafttitle').textContent = opts.title;
+    $('btn-begin').textContent = opts.begin;
+    $('draftopts').classList.toggle('hidden', !opts.difficulty);
+    this.draft = [...(opts.preset || [])];
     const box = $('draftcards'); box.innerHTML = '';
     for (const k of CLASS_KEYS) {
       const c = CLASSES[k], el = document.createElement('button');
@@ -100,6 +125,7 @@ class App {
 
   renderDraft() {
     const d = this.draft;
+    $('o-diff').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v === this.diff));
     $('draftcards').querySelectorAll('.card').forEach((b, j) => b.classList.toggle('sel', d.includes(CLASS_KEYS[j])));
     $('draftcount').textContent = `${d.length} / 4`;
     $('btn-begin').disabled = d.length !== 4;
@@ -242,6 +268,242 @@ class App {
       this.showEnd(false);
     }
   }
+
+  // -------------------------------------------------------------- versus modes (vs AI, hot-seat, online)
+  skirmishDraft() {
+    this.showDraft({ title: 'Skirmish vs AI: draft your squad', begin: 'Fight! ⚔️', difficulty: true, preset: store.get('wwt-squad', null),
+      onBegin: list => { store.set('wwt-squad', list); this.startVersus({ mode: 'ai', parties: { player: list, enemy: this.aiSquad() }, diff: this.diff }); } });
+  }
+
+  aiSquad() {
+    const r = rng(Math.floor(Math.random() * 1e9)), pool = [...CLASS_KEYS], out = [];
+    while (out.length < 4) out.push(pool.splice(Math.floor(r() * pool.length), 1)[0]);
+    return out;
+  }
+
+  localDraft() {
+    this.showDraft({ title: '🟦 Player 1: draft your squad', begin: 'Next: Player 2 ▶',
+      onBegin: p1 => this.showDraft({ title: '🟥 Player 2: draft your squad', begin: 'Start the duel ⚔️', back: () => this.localDraft(),
+        onBegin: p2 => this.startVersus({ mode: 'local', parties: { player: p1, enemy: p2 }, names: { player: 'Player 1', enemy: 'Player 2' } }) }) });
+  }
+
+  /** Build the board and controller for a one-off battle. cfg: { mode, parties, seed?, diff?, names?, mySide? } */
+  startVersus(cfg) {
+    this.ctl?.dispose(); this.ctl = null;
+    const seed = cfg.seed ?? Math.floor(Math.random() * 1e9);
+    this.vs = { ...cfg, seed };
+    const ai = cfg.mode === 'ai', pvp = !ai, mySide = cfg.mySide || 'player';
+    const guild = GUILDS[seed % GUILDS.length], diff = DIFF[cfg.diff || 'normal'];
+    const { grid, pSpawn, eSpawn } = generateMap(seed, 1);
+    const units = [];
+    cfg.parties.player.forEach((cls, i) => { const u = makeUnit({ cls, gear: [] }, 'player'); [u.x, u.y] = pSpawn[i]; units.push(u); });
+    cfg.parties.enemy.forEach((cls, i) => {
+      const u = makeUnit({ cls, gear: [] }, 'enemy', ai ? { hpMult: diff.hpMult, dmgBonus: diff.dmgBonus, tint: guild.tint } : {});
+      [u.x, u.y] = eSpawn[i]; units.push(u);
+    });
+    const names = ai ? { player: 'You', enemy: guild.name } : cfg.names;
+    this.vs.names = names;
+    const v = this.view;
+    v.mySide = mySide;
+    v.clearCamp(); v.clearUnits(); v.buildBoard(grid); v.battleCamera(mySide);
+    units.forEach(u => v.addUnit(u));
+    $('log').innerHTML = '';
+    $('vs').textContent = ai ? `Skirmish vs ${guild.name} (${diff.name})` : `🟦 ${names[mySide]}${cfg.mode === 'online' ? ' (you)' : ''} vs 🟥 ${names[mySide === 'player' ? 'enemy' : 'player']}`;
+    $('btn-quit').classList.remove('hidden');
+    show('battle');
+    const battle = this.battle = new Battle({ grid, units, view: v, seed, pvp, consumables: pvp ? { player: { potion: 1 }, enemy: { potion: 1 } } : { potion: 1 } });
+    const online = cfg.mode === 'online';
+    this.ctl = new BattleController(v, battle, {
+      enemyName: names.enemy, names,
+      localSides: cfg.mode === 'local' ? ['player', 'enemy'] : [mySide],
+      onFinish: () => this.finishVersus(battle),
+      onCommand: online ? (cmd, seq) => this.match?.sendCommand(cmd, seq) : null,
+      onTurn: cfg.mode === 'local' ? side => this.curtain(side) : null,
+    });
+    if (online) this.match.attach({ logLength: () => battle.actions.length, log: () => battle.actions });
+    this.turnKey = null;
+    clearInterval(this.ticker);
+    this.ticker = setInterval(() => this.tick(), 250);
+    this.tick();
+  }
+
+  /** Hot-seat: hide the board until the next player is ready, then turn the camera to their side. */
+  curtain(side) {
+    this.view.mySide = side;
+    this.view.battleCamera(side, true);
+    const other = side === 'player' ? 'enemy' : 'player';
+    $('vs').textContent = `🟦 ${this.vs.names[side]} (your heroes) vs 🟥 ${this.vs.names[other]}`;
+    $('cside').textContent = side === 'player' ? '①' : '②';
+    $('ctitle').textContent = `${this.vs.names[side]}'s turn`;
+    $('curtain').classList.remove('hidden');
+    return new Promise(res => { $('btn-ready').onclick = () => { $('curtain').classList.add('hidden'); res(); }; });
+  }
+
+  /** Online turn clock + opponent connection status. */
+  tick() {
+    const b = this.battle, el = $('turntimer');
+    if (!this.vs || !b || b.over || this.vs.mode !== 'online') { el.textContent = ''; return; }
+    const key = `${b.round}:${b.phase}`;
+    if (key !== this.turnKey) { this.turnKey = key; this.turnStart = Date.now(); }
+    const left = Math.max(0, TURN_SECONDS - Math.floor((Date.now() - this.turnStart) / 1000));
+    const mine = this.ctl?.myTurn();
+    el.textContent = `${mine ? 'Your turn' : 'Their turn'} ⏱ ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+    el.classList.toggle('low', left <= 15);
+    if (mine && left === 0 && !this.ctl.busy) { this.ctl.flashHint('Time is up: your turn ended.'); this.ctl.endTurn(); }
+    if (this.awayUntil) {
+      const s = Math.ceil((this.awayUntil - Date.now()) / 1000);
+      if (s <= 0) { this.awayUntil = null; this.forfeit('Your opponent did not come back.'); }
+      else $('netbar').textContent = `⚠️ ${this.vs.names[this.foe()]} disconnected. Waiting ${s}s for them to return…`;
+    }
+  }
+
+  foe() { return this.vs.mySide === 'player' ? 'enemy' : 'player'; }
+
+  /** The opponent left: the battle ends in our favor. */
+  forfeit(why) {
+    const b = this.battle;
+    if (!b || b.over) return;
+    b.over = true; b.phase = 'over'; b.result = this.vs.mySide === 'player' ? 'win' : 'lose';
+    this.forfeitNote = why;
+    this.ctl.refresh();
+    this.finishVersus(b);
+  }
+
+  async finishVersus(battle) {
+    if (battle.finished) return;
+    battle.finished = true;
+    clearInterval(this.ticker);
+    $('netbar').classList.add('hidden'); this.awayUntil = null;
+    await this.view.wait(1.2);
+    this.ctl?.dispose(); this.ctl = null;
+    const vs = this.vs, winSide = battle.result === 'win' ? 'player' : 'enemy';
+    const survivors = battle.units.filter(u => u.alive && u.side === winSide).length;
+    let title, text;
+    if (vs.mode === 'local') { title = `${vs.names[winSide]} wins!`; text = `${survivors} hero${survivors === 1 ? '' : 's'} left standing after ${battle.round} rounds.`; }
+    else {
+      const won = winSide === (vs.mySide || 'player');
+      title = won ? 'Victory!' : 'Defeat';
+      text = vs.mode === 'ai' ? `${won ? 'You beat' : 'You fell to'} ${vs.names?.enemy || 'the AI squad'} on ${DIFF[vs.diff || 'normal'].name} in ${battle.round} rounds.`
+        : `${won ? 'You beat' : 'You lost to'} ${vs.names[this.foe()]} in ${battle.round} rounds.`;
+      if (this.forfeitNote) text = `${this.forfeitNote} You win by forfeit.`;
+    }
+    this.forfeitNote = null;
+    await this.view.banner(title);
+    $('restitle').textContent = title; $('restext').textContent = text; $('resnote').textContent = '';
+    $('btn-rematch').disabled = vs.mode === 'online' && !this.match?.present;
+    show('result');
+  }
+
+  bindVersus() {
+    $('btn-quit').onclick = () => {
+      if (!confirm(this.vs?.mode === 'online' ? 'Leave the match? Your opponent wins.' : 'Leave this battle?')) return;
+      this.leaveVersus(); this.showTitle();
+    };
+    $('btn-rematch').onclick = () => {
+      const vs = this.vs;
+      if (vs.mode === 'online') { this.match.requestRematch(); $('resnote').textContent = '⏳ Waiting for your opponent to accept the rematch…'; $('btn-rematch').disabled = true; return; }
+      this.startVersus({ ...vs, seed: undefined, parties: vs.mode === 'ai' ? { player: vs.parties.player, enemy: this.aiSquad() } : vs.parties });
+    };
+    $('btn-resquads').onclick = () => {
+      const mode = this.vs.mode; this.leaveVersus();
+      if (mode === 'ai') this.skirmishDraft(); else if (mode === 'local') this.localDraft(); else this.onlineDraft();
+    };
+    $('btn-resmenu').onclick = () => { this.leaveVersus(); this.showTitle(); };
+
+    // online lobby
+    $('netname').value = store.get('wwt-name', '');
+    $('netname').onchange = () => store.set('wwt-name', $('netname').value.trim().slice(0, 16));
+    $('joincode').oninput = () => { $('joincode').value = cleanCode($('joincode').value); };
+    $('joincode').onkeydown = e => { if (e.key === 'Enter') $('btn-join').click(); };
+    $('btn-onlineback').onclick = () => { this.leaveVersus(); this.showTitle(); };
+    $('netchange').onclick = e => { e.preventDefault(); this.onlineDraft(); };
+    $('btn-quickmatch').onclick = () => this.lobby(m => m.quickMatch());
+    $('btn-host').onclick = () => this.lobby(async m => {
+      const code = await m.host();
+      $('roomcode').textContent = code; $('roomcode').classList.remove('hidden'); $('btn-copycode').classList.remove('hidden');
+    });
+    $('btn-join').onclick = () => {
+      const code = cleanCode($('joincode').value);
+      if (code.length !== 4) { $('neterror').textContent = 'Enter the 4-letter room code your friend sees.'; return; }
+      this.lobby(m => m.join(code));
+    };
+    $('btn-copycode').onclick = () => {
+      const q = new URLSearchParams(location.search); q.set('join', $('roomcode').textContent);
+      const link = `${location.origin}${location.pathname}?${q}`;
+      navigator.clipboard?.writeText(link).then(() => { $('btn-copycode').textContent = '✅ Link copied'; }, () => prompt('Copy this link:', link));
+    };
+    $('btn-netcancel').onclick = () => { this.match?.close(); this.match = null; this.lobbyUi(false); };
+    addEventListener('beforeunload', () => this.match?.close());
+  }
+
+  onlineDraft() {
+    this.showDraft({ title: 'Online Duel: pick your squad', begin: 'Choose this squad ▶', preset: store.get('wwt-squad', null), back: () => this.openOnline(),
+      onBegin: list => { store.set('wwt-squad', list); this.openOnline(); } });
+  }
+
+  openOnline(code = '') {
+    if (!this.transport) { alert('Online play is not configured: add the Supabase URL and publishable key to arena/config.js.'); return; }
+    this.leaveVersus();
+    $('netparty').textContent = squadNames(store.get('wwt-squad', RECOMMENDED));
+    if (code) $('joincode').value = cleanCode(code);
+    $('neterror').textContent = '';
+    this.lobbyUi(false);
+    show('online');
+  }
+
+  lobbyUi(waiting, status = '') {
+    $('lobbymenu').classList.toggle('hidden', waiting);
+    $('lobbywait').classList.toggle('hidden', !waiting);
+    $('netstatus').innerHTML = status;
+    if (!waiting) { $('roomcode').classList.add('hidden'); $('btn-copycode').classList.add('hidden'); $('btn-copycode').textContent = '📋 Copy invite link'; }
+  }
+
+  /** Open a match and run one lobby action (quick match / host / join). */
+  async lobby(action) {
+    const name = $('netname').value.trim().slice(0, 16) || 'Wanderer';
+    store.set('wwt-name', name);
+    this.match?.close();
+    const m = this.match = new OnlineMatch(this.transport, { name, party: store.get('wwt-squad', RECOMMENDED) });
+    $('neterror').textContent = '';
+    this.lobbyUi(true, 'Connecting…');
+    m.onStatus = html => { if (this.match === m) $('netstatus').innerHTML = html; };
+    m.onStart = setup => {
+      if (this.match !== m) return;
+      $('netbar').classList.add('hidden'); this.awayUntil = null;
+      this.startVersus({ mode: 'online', seed: setup.seed, parties: setup.parties, names: setup.names, mySide: setup.mySide });
+    };
+    m.onCommand = cmd => this.ctl?.applyRemote(cmd).then(ok => { if (!ok && this.battle && !this.battle.over) this.desync(); });
+    m.onOpponent = present => {
+      if (!this.battle || this.battle.over || this.vs?.mode !== 'online') return;
+      if (present) { this.awayUntil = null; $('netbar').classList.add('hidden'); this.ctl?.flashHint('Your opponent is back.'); }
+      else { this.awayUntil = Date.now() + RETURN_SECONDS * 1000; $('netbar').classList.remove('hidden'); }
+    };
+    m.onLeft = () => {
+      if (this.battle && !this.battle.over && this.vs?.mode === 'online') this.forfeit('Your opponent left the match.');
+      else { $('resnote').textContent = 'Your opponent has left.'; $('btn-rematch').disabled = true; }
+    };
+    m.onRematch = () => { $('resnote').textContent = '🔁 Your opponent wants a rematch! Press Rematch to accept.'; };
+    try { await action(m); }
+    catch (e) {
+      if (this.match !== m) return;
+      m.close(); this.match = null; this.lobbyUi(false);
+      $('neterror').textContent = `⚠️ ${e.message}${this.transport.kind === 'supabase' && !/room/i.test(e.message) ? ' (Supabase Realtime must be enabled for the project.)' : ''}`;
+    }
+  }
+
+  desync() {
+    this.ctl?.flashHint('The two screens disagree about the game state (desync). Start a rematch.');
+    this.forfeitNote = null;
+  }
+
+  leaveVersus() {
+    clearInterval(this.ticker); this.awayUntil = null;
+    $('netbar').classList.add('hidden'); $('curtain').classList.add('hidden'); $('turntimer').textContent = '';
+    this.ctl?.dispose(); this.ctl = null;
+    if (this.battle) this.battle.finished = true;
+    this.match?.close(); this.match = null;
+    this.vs = null; this.view.mySide = 'player';
+  }
 }
 
 // ------------------------------------------------------------------ boot
@@ -251,3 +513,5 @@ bindHelp();
 const app = new App(view);
 window.app = app; // for debugging and automated tests
 app.showTitle();
+const joinCode = new URLSearchParams(location.search).get('join');
+if (joinCode) app.openOnline(joinCode);

@@ -14,7 +14,9 @@
 <div id="labels"></div>
 
 <div id="hud" class="hidden">
-  <div id="topbar"><b id="round">Round 1</b><span id="vs"></span></div>
+  <div id="topbar"><b id="round">Round 1</b><span id="vs"></span><span id="turntimer"></span><button id="btn-quit" class="btn hidden" title="Leave this battle">✕ Quit</button></div>
+  <div id="curtain" class="hidden"><div class="cbox"><div class="cside" id="cside"></div><h1 id="ctitle">Player 2</h1><p>Pass the device. Your opponent should look away!</p><button id="btn-ready" class="btn gold big">I'm ready ▶</button></div></div>
+  <div id="netbar" class="hidden"></div>
   <div id="banner"></div>
   <div id="hint" aria-live="polite"></div>
   <div id="legend"><span><i style="background:#3a8dff"></i>Move</span><span><i style="background:#ff4d4d"></i>Attack</span><span><i style="background:#6dff8a"></i>Heal</span><span><i style="background:#ffa040"></i>Area</span><span><i style="background:#ffd54a"></i>Selected</span>
@@ -30,16 +32,21 @@
 <section id="screen-loading" class="screen active"><h1>Wildwood Tactics</h1><p id="loadtxt">Gathering the guilds…</p></section>
 
 <section id="screen-title" class="screen">
+  <a class="backhub" href="../">⟵ Games</a>
   <h1>Wildwood Tactics</h1>
-  <p class="lede">The mercenary guilds have turned on each other in the Wildwood. Draft a party of four, outfight rival squads among the
-    rocks and trees, and break the Hollow Crown.</p>
-  <div class="row">
-    <button id="btn-learn" class="btn learn big">🎓 Learn to play (2 min)</button>
-    <button id="btn-new" class="btn gold big">New Run</button>
-    <button id="btn-continue" class="btn big">Continue</button>
-  </div>
+  <p class="lede">The mercenary guilds have turned on each other in the Wildwood. Draft a squad of four and outfight your rivals among the rocks and trees.</p>
+  <div class="row"><button id="btn-learn" class="btn learn">🎓 Learn to play (2 min)</button><button class="btn helpbtn">❓ How to play</button></div>
   <p id="newhere" class="maphint"></p>
-  <div class="row"><button class="btn helpbtn">❓ How to play</button></div>
+  <div class="gmodes">
+    <div class="gmode" id="mode-campaign"><div class="mic">🗺️</div><b>Campaign</b><span>Roguelite run: fight up the Wildwood map to the Hollow Crown. Wounds and loot carry over.</span>
+      <div class="mbtns"><button id="btn-new" class="btn gold">New Run</button><button id="btn-continue" class="btn">Continue</button></div></div>
+    <div class="gmode" id="mode-skirmish"><div class="mic">⚔️</div><b>Skirmish vs AI</b><span>One quick battle against a computer squad. Choose the difficulty.</span>
+      <div class="mbtns"><button id="btn-skirmish" class="btn gold">Play vs AI</button></div></div>
+    <div class="gmode" id="mode-local"><div class="mic">👥</div><b>2 Players: same screen</b><span>Hot-seat duel. Draft two squads and pass the device between turns.</span>
+      <div class="mbtns"><button id="btn-local" class="btn gold">Play local</button></div></div>
+    <div class="gmode" id="mode-online"><div class="mic">🌐</div><b>Online Duel</b><span>Play a friend with a room code, or Quick Match with anyone waiting.</span>
+      <div class="mbtns"><button id="btn-online" class="btn gold">Play online</button></div><small id="onlinenote"></small></div>
+  </div>
   <details class="howto"><summary>How to play</summary>
     <ul>
       <li>Each hero can <b>move</b> once and take one <b>action</b> per turn, in either order. Then the enemy squad moves.</li>
@@ -48,13 +55,12 @@
       <li>Wounds carry between fights. Fallen heroes stay down unless you revive them with a potion at a campfire.</li>
     </ul>
   </details>
-  <a class="alt" href="../chess/">Wizard's Chess (living 3D chess) →</a>
-  <a class="alt" href="../arena/">Online: Wildwood Arena (build &amp; raid strongholds) →</a>
-  <a class="alt" href="../index.html">Play Forest Relic Hunt (action mode) →</a>
 </section>
 
 <section id="screen-draft" class="screen">
-  <h2>Draft your party <small id="draftcount">0 / 4</small></h2>
+  <button class="btn backbtn" id="btn-draftback">◀ Back</button>
+  <h2><span id="drafttitle">Draft your party</span> <small id="draftcount">0 / 4</small></h2>
+  <div id="draftopts" class="hidden"><span>Difficulty</span><div class="seg" id="o-diff"><button data-v="easy">Easy</button><button data-v="normal" class="on">Normal</button><button data-v="hard">Hard</button></div></div>
   <div class="quick"><span>Pick any 4 heroes, or</span><button id="btn-quick" class="btn">⭐ Use the recommended party</button><button class="btn helpbtn" data-help="classes">❓ Hero guide</button></div>
   <div id="draftwarn" class="dhint"></div>
   <div id="draftcards" class="cards"></div>
@@ -91,6 +97,30 @@
   <h1 id="tuttitle">You're ready!</h1>
   <p class="lede" id="tuttext">That's the whole loop: <b>select → move → act → End Turn</b>. Use cover, hide in bushes and keep an eye on the enemy's threat range (T).</p>
   <div class="row"><button id="btn-tut-run" class="btn gold big">Start a real run</button><button id="btn-tut-again" class="btn big">Replay training</button><button id="btn-tut-title" class="btn big">Title screen</button></div>
+</section>
+
+<section id="screen-online" class="screen">
+  <button class="btn backbtn" id="btn-onlineback">◀ Back</button>
+  <h2>Online Duel</h2>
+  <div class="lobby">
+    <label class="nm">Your name <input id="netname" maxlength="16" placeholder="Wanderer"></label>
+    <div id="lobbymenu">
+      <div class="lrow"><button id="btn-quickmatch" class="btn gold big">⚡ Quick Match</button></div>
+      <div class="lsep">or play a friend</div>
+      <div class="lrow"><button id="btn-host" class="btn big">🏠 Create room</button>
+        <span class="joinbox"><input id="joincode" maxlength="4" placeholder="CODE" autocomplete="off"><button id="btn-join" class="btn big">Join</button></span></div>
+    </div>
+    <div id="lobbywait" class="hidden"><div class="spinner"></div><p id="netstatus"></p><div id="roomcode" class="hidden"></div><button id="btn-copycode" class="btn hidden">📋 Copy invite link</button><button id="btn-netcancel" class="btn">Cancel</button></div>
+    <p id="neterror" class="neterr"></p>
+    <p class="maphint">Your squad: <span id="netparty"></span> · <a href="#" id="netchange">change</a></p>
+  </div>
+</section>
+
+<section id="screen-result" class="screen">
+  <h1 id="restitle">Victory!</h1>
+  <p class="lede" id="restext"></p>
+  <div class="row"><button id="btn-rematch" class="btn gold big">↻ Rematch</button><button id="btn-resquads" class="btn big">Change squads</button><button id="btn-resmenu" class="btn big">Main menu</button></div>
+  <p id="resnote" class="maphint"></p>
 </section>
 
 <section id="screen-end" class="screen">

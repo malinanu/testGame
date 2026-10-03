@@ -142,3 +142,19 @@ function peer(m) {
   [...ms, late].forEach(m => m.close());
   console.log('ok quick match pairing (simultaneous search, waiting host)');
 }
+{ // names from other players are shown as text, never as HTML
+  const evil = '<img src=x onerror=alert(1)>';
+  const host = new OnlineMatch(transport(), { name: evil, party: pick(0) });
+  const guest = new OnlineMatch(transport(), { name: 'Safe', party: pick(1) });
+  const said = []; guest.onStatus = h => said.push(h);
+  let a = null, b = null;
+  host.quickMatch({ settle: 100 }).then(x => { a = x; });
+  await sleep(500);
+  guest.quickMatch({ settle: 150 }).then(x => { b = x; });
+  await until(() => a && b, 8000, 'paired');
+  const found = said.find(h => h.startsWith('Found'));
+  assert.ok(found && !found.includes('<img') && found.includes('&lt;img'), `escaped: ${found}`);
+  assert.equal(b.names.player.length <= 20, true, 'names are capped');
+  host.close(); guest.close();
+  console.log('ok lobby names escaped');
+}

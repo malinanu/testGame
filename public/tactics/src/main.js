@@ -51,7 +51,8 @@ class App {
     $('btn-tut-again').onclick = () => this.tutorial();
     $('btn-tut-title').onclick = () => this.showTitle();
     $('btn-quick').onclick = () => this.pickParty(RECOMMENDED);
-    $('btn-continue').onclick = () => { this.run = Run.load(); this.showMap(); };
+    // a reload mid-fight resumes that fight (it was saved as entered but not yet won)
+    $('btn-continue').onclick = () => { this.run = Run.load(); if (this.run.inBattle && Run.currentNode(this.run)) this.startBattle(Run.currentNode(this.run)); else this.showMap(); };
     $('btn-begin').onclick = () => this.draftOpts.onBegin([...this.draft]);
     $('btn-draftback').onclick = () => (this.draftOpts.back || (() => this.showTitle()))();
     $('o-diff').querySelectorAll('button').forEach(b => { b.onclick = () => { this.diff = b.dataset.v; store.set('wwt-diff', this.diff); this.renderDraft(); }; });
@@ -180,6 +181,7 @@ class App {
     const run = this.run;
     Run.travel(run, node);
     (run.visited ||= []).push(`${node.l}:${node.i}`);
+    run.inBattle = node.type !== 'camp' && node.type !== 'cache';
     Run.save(run);
     if (node.type === 'camp') this.showCamp();
     else if (node.type === 'cache') this.showLoot(false, 'Supply cache', 'An abandoned mercenary stash. Take one.');
@@ -256,6 +258,7 @@ class App {
     battle.finished = true;
     await this.view.wait(1.2);
     this.ctl.dispose(); this.ctl = null;
+    this.run.inBattle = false;
     if (battle.result === 'win') {
       Run.afterBattle(this.run, battle.units, enc);
       Run.save(this.run);
@@ -359,12 +362,14 @@ class App {
 
   foe() { return this.vs.mySide === 'player' ? 'enemy' : 'player'; }
 
-  /** The opponent left: the battle ends in our favor. */
-  forfeit(why) {
+  /** The opponent left (or, with won = false, they claimed it from us): the battle ends by forfeit. */
+  forfeit(why, won = true) {
     const b = this.battle;
     if (!b || b.over) return;
-    b.over = true; b.phase = 'over'; b.result = this.vs.mySide === 'player' ? 'win' : 'lose';
-    this.forfeitNote = why;
+    b.over = true; b.phase = 'over';
+    b.result = (this.vs.mySide === 'player') === won ? 'win' : 'lose';
+    this.forfeitNote = `${why} ${won ? 'You win' : 'You lose'} by forfeit.`;
+    if (won && this.vs.mode === 'online') this.match?.claim(why); // so their screen ends too when they return
     this.ctl.refresh();
     this.finishVersus(b);
   }
@@ -385,9 +390,10 @@ class App {
       title = won ? 'Victory!' : 'Defeat';
       text = vs.mode === 'ai' ? `${won ? 'You beat' : 'You fell to'} ${vs.names?.enemy || 'the AI squad'} on ${DIFF[vs.diff || 'normal'].name} in ${battle.round} rounds.`
         : `${won ? 'You beat' : 'You lost to'} ${vs.names[this.foe()]} in ${battle.round} rounds.`;
-      if (this.forfeitNote) text = `${this.forfeitNote} You win by forfeit.`;
+      if (this.forfeitNote) text = this.forfeitNote;
+      if (this.voidNote) { title = 'Match void'; text = this.voidNote; }
     }
-    this.forfeitNote = null;
+    this.forfeitNote = this.voidNote = null;
     await this.view.banner(title);
     $('restitle').textContent = title; $('restext').textContent = text; $('resnote').textContent = '';
     $('btn-rematch').disabled = vs.mode === 'online' && !this.match?.present;
@@ -469,10 +475,17 @@ class App {
     m.onStatus = html => { if (this.match === m) $('netstatus').innerHTML = html; };
     m.onStart = setup => {
       if (this.match !== m) return;
+      // the squads come from the other browser: only known hero classes, one to four of them
+      const okParty = q => Array.isArray(q) && q.length >= 1 && q.length <= 4 && q.every(c => CLASS_KEYS.includes(c));
+      if (!okParty(setup.parties?.player) || !okParty(setup.parties?.enemy)) {
+        m.close(); this.match = null; this.lobbyUi(false); $('neterror').textContent = '⚠️ The other player sent an invalid squad.'; return;
+      }
       $('netbar').classList.add('hidden'); this.awayUntil = null;
       this.startVersus({ mode: 'online', seed: setup.seed, parties: setup.parties, names: setup.names, mySide: setup.mySide });
     };
-    m.onCommand = cmd => this.ctl?.applyRemote(cmd).then(ok => { if (!ok && this.battle && !this.battle.over) this.desync(); });
+    m.onCommand = cmd => this.ctl?.applyRemote(cmd).then(ok => { if (!ok && this.battle && !this.battle.over) this.desync(); }, () => this.desync());
+    m.onClaim = () => { if (this.match === m) this.forfeit('You were away too long: your opponent claimed the win.', false); };
+    m.onConnection = st => { if (this.match === m && this.battle && !this.battle.over) this.ctl?.flashHint(st === 'down' ? '⚠️ Lost the connection to the online service. Reconnecting…' : 'Reconnected.'); };
     m.onOpponent = present => {
       if (!this.battle || this.battle.over || this.vs?.mode !== 'online') return;
       if (present) { this.awayUntil = null; $('netbar').classList.add('hidden'); this.ctl?.flashHint('Your opponent is back.'); }
@@ -491,9 +504,13 @@ class App {
     }
   }
 
+  /** The two browsers disagree about the game (a rejected command): end it without a winner. */
   desync() {
-    this.ctl?.flashHint('The two screens disagree about the game state (desync). Start a rematch.');
-    this.forfeitNote = null;
+    const b = this.battle;
+    if (!b || b.over) return;
+    b.over = true; b.phase = 'over'; b.result = 'lose';
+    this.voidNote = 'The two screens stopped agreeing about the game (desync). Start a rematch.';
+    this.ctl?.refresh(); this.finishVersus(b);
   }
 
   leaveVersus() {

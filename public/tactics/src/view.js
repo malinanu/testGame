@@ -111,6 +111,7 @@ export class View {
   /** Build the tile board + terrain props from a Grid. */
   buildBoard(grid) {
     this.grid = grid;
+    if (this.tiles) { this.tiles.geometry.dispose(); this.tiles.material.dispose(); this.tiles.dispose(); } // one per battle
     this.board.clear();
     this.burnt = new Set(); this.fires = new Map();
     this.props = new Array(W * H).fill(null);
@@ -197,10 +198,14 @@ export class View {
   /** Dotted footprints along a planned walking path ([[x,y],...]) or null to clear. */
   showPath(path) {
     if (!this.pathGroup) { this.pathGroup = new THREE.Group(); this.scene.add(this.pathGroup); }
+    // called on every hover move: skip an unchanged path, and share one dot geometry + material
+    const key = path && path.length > 1 ? path.join(';') : '';
+    if (key === this.pathKey) return;
+    this.pathKey = key;
     this.pathGroup.clear();
-    if (!path || path.length < 2) return;
-    const mat = new THREE.MeshBasicMaterial({ color: 0xbfe4ff, transparent: true, opacity: 0.85, depthWrite: false });
-    const geo = new THREE.CircleGeometry(0.16, 12).rotateX(-Math.PI / 2);
+    if (!key) return;
+    const P = this.pathRes ||= { mat: new THREE.MeshBasicMaterial({ color: 0xbfe4ff, transparent: true, opacity: 0.85, depthWrite: false }), geo: new THREE.CircleGeometry(0.16, 12).rotateX(-Math.PI / 2) };
+    const mat = P.mat, geo = P.geo;
     for (let i = 1; i < path.length; i++) {
       const a = tw(...path[i - 1]), b = tw(...path[i]);
       for (const k of [0.33, 0.66, 1]) {
@@ -304,7 +309,12 @@ export class View {
   }
 
   clearUnits() {
-    for (const uv of this.units.values()) { this.scene.remove(uv.actor.root); uv.label.remove(); }
+    for (const uv of this.units.values()) {
+      this.scene.remove(uv.actor.root); uv.label.remove();
+      // the actor's materials are its own clones and the rings are per unit; meshes and props are shared assets
+      for (const m of uv.actor.meshes) m.material.dispose();
+      for (const o of [uv.ring, uv.aura]) if (o) { o.geometry.dispose(); o.material.dispose(); }
+    }
     this.units.clear();
     for (const f of this.floats) f.el.remove();
     this.floats = [];
@@ -370,7 +380,8 @@ export class View {
 
   // ------------------------------------------------------------ battle animations
   async walk(u, path) {
-    const uv = this.uv(u), a = uv.actor;
+    const uv = this.uv(u); if (!uv) return; // the board was cleared (left mid-turn)
+    const a = uv.actor;
     a.busy = 0; a.setBase('Running_A');
     for (let i = 1; i < path.length; i++) {
       const from = tw(...path[i - 1]), to = tw(...path[i]);
@@ -388,7 +399,8 @@ export class View {
   }
 
   async attack(u, tx, ty, a) {
-    const uv = this.uv(u), act = uv.actor, home = act.root.position.clone();
+    const uv = this.uv(u); if (!uv) return;
+    const act = uv.actor, home = act.root.position.clone();
     if (a.kind === 'cleave') {
       act.once('Use_Item', { speed: 2 });
       const r0 = act.root.rotation.y;
@@ -618,16 +630,40 @@ export class View {
       return x >= 0 && y >= 0 && x < W && y < H ? [x, y] : null;
     };
     canvas.addEventListener('contextmenu', e => e.preventDefault());
-    canvas.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY, b: e.button, moved: 0 }; });
+    // mouse: right-drag (or shift+drag) orbits. touch: one finger orbits once it moves, two fingers pinch-zoom;
+    // either way a gesture never counts as a tap on a tile
+    const touches = new Map();
+    let pinch = 0;
+    canvas.addEventListener('pointerdown', e => {
+      if (e.pointerType === 'touch') { touches.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (touches.size > 1 && drag) drag.moved = 99; pinch = 0; }
+      if (touches.size <= 1) drag = { x: e.clientX, y: e.clientY, b: e.button, moved: 0, touch: e.pointerType === 'touch' };
+    });
+    const lift = e => { touches.delete(e.pointerId); pinch = 0; };
+    addEventListener('pointercancel', e => { lift(e); drag = null; });
     addEventListener('pointerup', e => {
+      lift(e);
       if (drag && drag.moved < 6 && e.target === canvas) {
         const t = pick(e);
         if (drag.b === 0) this.onClick?.(t); else if (drag.b === 2) this.onCancel?.();
       }
-      drag = null;
+      if (!touches.size) drag = null;
     });
     canvas.addEventListener('pointermove', e => {
-      if (drag) {
+      if (e.pointerType === 'touch' && touches.has(e.pointerId)) {
+        const t = touches.get(e.pointerId), dx = e.clientX - t.x, dy = e.clientY - t.y; t.x = e.clientX; t.y = e.clientY;
+        if (touches.size > 1) {
+          const [a, b] = [...touches.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
+          if (pinch) this.cam.dist = THREE.MathUtils.clamp(this.cam.dist - (d - pinch) * 0.06, 12, 48);
+          pinch = d; return;
+        }
+        if (!drag) return;
+        drag.moved += Math.abs(dx) + Math.abs(dy);
+        if (drag.moved > 10) {
+          this.cam.yawGoal -= dx * 0.008; this.cam.yaw = this.cam.yawGoal;
+          this.cam.pitch = THREE.MathUtils.clamp(this.cam.pitch + dy * 0.005, 0.35, 1.35);
+          return;
+        }
+      } else if (drag) {
         drag.moved += Math.abs(e.movementX) + Math.abs(e.movementY);
         if (drag.b === 2 || (drag.b === 0 && drag.moved > 6 && e.buttons & 1 && e.shiftKey)) {
           this.cam.yawGoal -= e.movementX * 0.006; this.cam.yaw = this.cam.yawGoal;

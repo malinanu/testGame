@@ -24,17 +24,26 @@ function seg(id, onChange) {
 
 /** Runs the search in a module Web Worker; falls back to the main thread if workers are unavailable. */
 class AIClient {
-  constructor() {
-    this.pending = new Map(); this.id = 0;
+  constructor() { this.pending = new Map(); this.id = 0; this.spawn(); }
+  spawn() {
     try {
       this.w = new Worker(new URL('./ai-worker.js', import.meta.url), { type: 'module' });
-      this.w.onmessage = e => { const p = this.pending.get(e.data.id); if (p) { this.pending.delete(e.data.id); p(e.data.move); } };
-      this.w.onerror = () => { this.w = null; for (const [id, p] of this.pending) { this.pending.delete(id); p(null); } };
+      this.w.onmessage = e => { const p = this.pending.get(e.data.id); if (p) { this.pending.delete(e.data.id); p.res(e.data.move); } };
+      // a crashed worker: finish the searches it owed on the main thread instead of leaving the game waiting
+      this.w.onerror = () => { this.w = null; for (const [id, p] of this.pending) { this.pending.delete(id); this.local(p.fen, p.level).then(p.res); } };
     } catch { this.w = null; }
   }
+  /** New game / undo: stop a search that is still running (its answer would be for the old position). */
+  reset() {
+    if (!this.w) return;
+    this.w.terminate();
+    for (const [id, p] of this.pending) { this.pending.delete(id); p.res(null); }
+    this.spawn();
+  }
+  local(fen, level) { return new Promise(res => setTimeout(() => { const r = search(fen, LEVELS[level]); res(r?.move ? { from: sqName(r.move.from), to: sqName(r.move.to), promo: r.move.promo } : null); }, 30)); }
   think(fen, level) {
-    if (!this.w) return new Promise(res => setTimeout(() => { const r = search(fen, LEVELS[level]); res(r?.move ? { from: sqName(r.move.from), to: sqName(r.move.to), promo: r.move.promo } : null); }, 30));
-    return new Promise(res => { const id = ++this.id; this.pending.set(id, res); this.w.postMessage({ id, fen, level }); });
+    if (!this.w) return this.local(fen, level);
+    return new Promise(res => { const id = ++this.id; this.pending.set(id, { res, fen, level }); this.w.postMessage({ id, fen, level }); });
   }
 }
 
@@ -71,6 +80,7 @@ class Game {
     this.mode = mode; this.level = this.getLevel();
     this.humans = new Set(mode === 'local' ? [WHITE, BLACK] : mode === 'ai' ? [me] : []);
     this.chess = new Chess(); this.selected = null; this.last = null; this.active = true; this.token++;
+    this.ai.reset(); this.busy = false; // drop a search still running for the previous game
     this.scene.setPosition(this.chess);
     this.scene.viewFor(mode === 'ai' ? me : WHITE);
     this.scene.setHighlights({});
@@ -147,7 +157,8 @@ class Game {
       const mv = await this.ai.think(this.chess.fen(), this.mode === 'watch' ? (this.chess.turn === WHITE ? 'medium' : this.level) : this.level);
       if (token !== this.token) return;
       await new Promise(r => setTimeout(r, Math.max(0, 450 - (performance.now() - t0))));
-      if (!mv) return;
+      if (token !== this.token) return; // a new game started during the pause: this move is for the old board
+      if (!mv) { this.busy = false; this.renderHud(); return; }
       await this.perform(mv);
     }
   }

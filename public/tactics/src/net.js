@@ -14,6 +14,9 @@ export function makeCode(rand = Math.random) { let s = ''; for (let i = 0; i < 4
 export const cleanCode = s => String(s || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4);
 const uid = () => (globalThis.crypto?.randomUUID?.() || String(Math.random()).slice(2)).slice(0, 12);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+/** Names come from other players (lobby presence, hello): never trust them as HTML. */
+export const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const cleanName = s => String(s || 'Rival').replace(/[\u0000-\u001f]/g, '').slice(0, 20);
 
 // ------------------------------------------------------------------ transports
 export class LocalTransport {
@@ -61,7 +64,7 @@ export class SupabaseTransport {
   }
   channel(topic) {
     const key = uid();
-    let ch = null, onMsg = () => {}, onPres = () => {};
+    let ch = null, onMsg = () => {}, onPres = () => {}, onState = () => {};
     const self = this;
     return {
       async subscribe() {
@@ -69,17 +72,25 @@ export class SupabaseTransport {
         ch = sb.channel(topic, { config: { broadcast: { self: false }, presence: { key } } });
         ch.on('broadcast', { event: 'm' }, ({ payload }) => onMsg(payload));
         ch.on('presence', { event: 'sync' }, () => onPres(Object.values(ch.presenceState()).flat()));
-        await new Promise((resolve, reject) => {
-          const t = setTimeout(() => reject(new Error('Timed out connecting to the online service.')), 12000);
-          ch.subscribe((status, err) => {
-            if (status === 'SUBSCRIBED') { clearTimeout(t); resolve(); }
-            else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') { clearTimeout(t); reject(new Error(err?.message || `Realtime channel ${status.toLowerCase()}`)); }
+        let up = false;
+        try {
+          await new Promise((resolve, reject) => {
+            const t = setTimeout(() => reject(new Error('Timed out connecting to the online service.')), 12000);
+            ch.subscribe((status, err) => {
+              if (status === 'SUBSCRIBED') { clearTimeout(t); if (!up) { up = true; resolve(); } else onState('up'); }
+              else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+                clearTimeout(t);
+                if (up) onState('down'); // connected before: tell the match (the client retries by itself)
+                else reject(new Error(err?.message || `Realtime channel ${status.toLowerCase()}`));
+              }
+            });
           });
-        });
+        } catch (e) { const c = ch; ch = null; if (c) sb.removeChannel(c); throw e; }
       },
       send(payload) { ch?.send({ type: 'broadcast', event: 'm', payload }); },
       onMessage(fn) { onMsg = fn; },
       onPresence(fn) { onPres = fn; },
+      onState(fn) { onState = fn; },
       track(meta) { return ch?.track(meta); },
       untrack() { return ch?.untrack(); },
       close() { if (ch) { const c = ch; ch = null; c.untrack().catch(() => {}); self.sb.removeChannel(c); } },
@@ -104,6 +115,8 @@ export function pickTransport(config, search = globalThis.location?.search || ''
  *   onOpponent(present)   opponent dropped / came back
  *   onRematch()           the opponent asks for a rematch
  *   onLeft()              the opponent left for good
+ *   onClaim(reason)       the opponent claimed the win (we were away too long)
+ *   onConnection(state)   our own link to the service went 'down' / came back 'up'
  * attach({ logLength: () => n, log: () => actions }) links the battle so gaps can be repaired.
  */
 export class OnlineMatch {
@@ -112,33 +125,37 @@ export class OnlineMatch {
     this.room = null; this.lobby = null; this.role = null; this.code = null; this.peer = null; this.setup = null;
     this.expect = 0; this.buffer = new Map(); this.linked = null; this.present = false; this.closed = false;
     this.wantRematch = false; this.peerRematch = false;
-    this.onStatus = this.onStart = this.onCommand = this.onOpponent = this.onRematch = this.onLeft = () => {};
+    this.onStatus = this.onStart = this.onCommand = this.onOpponent = this.onRematch = this.onLeft = this.onClaim = this.onConnection = () => {};
   }
 
   attach(linked) { this.linked = linked; this.expect = linked.logLength(); this.buffer.clear(); }
 
   async openRoom(code) {
     this.code = code;
-    this.room = this.t.channel(roomTopic(code));
-    this.room.onMessage(m => this.handle(m));
-    this.room.onPresence(list => this.presence(list));
-    await this.room.subscribe();
-    await this.room.track({ id: this.id, name: this.name, role: this.role });
+    const room = this.room = this.t.channel(roomTopic(code));
+    room.onMessage(m => this.handle(m));
+    room.onPresence(list => this.presence(list));
+    room.onState?.(st => this.onConnection(st));
+    await room.subscribe();
+    if (this.closed || this.room !== room) { room.close(); throw new Error('Cancelled.'); } // Cancel pressed while connecting
+    await room.track({ id: this.id, name: this.name, role: this.role });
   }
 
   /** Create a room and wait for a guest. Resolves once the room is open. */
   async host(code = makeCode()) {
     this.role = 'host';
     await this.openRoom(code);
-    this.onStatus(`Room <b>${code}</b> is open. Waiting for an opponent…`);
+    this.onStatus(`Room <b>${esc(code)}</b> is open. Waiting for an opponent…`);
     return code;
   }
 
   /** Join a room by code. Resolves when the host has started the match; rejects if nobody answers. */
   async join(code, { timeout = 9000 } = {}) {
+    code = cleanCode(code);
+    if (code.length !== 4) throw new Error('Room codes are 4 letters.');
     this.role = 'guest';
     await this.openRoom(code);
-    this.onStatus(`Joining room <b>${code}</b>…`);
+    this.onStatus(`Joining room <b>${esc(code)}</b>…`);
     const until = Date.now() + timeout;
     while (!this.setup && !this.closed && !this.rejected && Date.now() < until) {
       this.room.send({ t: 'hello', from: this.id, name: this.name, party: this.party });
@@ -167,7 +184,7 @@ export class OnlineMatch {
       if (!open.length) break;
       const p = open[0];
       tried.add(p.code);
-      try { this.onStatus(`Found <b>${p.name}</b>, joining…`); await this.join(p.code, { timeout: 5000 }); this.leaveLobby(); return this.setup; }
+      try { this.onStatus(`Found <b>${esc(cleanName(p.name))}</b>, joining…`); await this.join(p.code, { timeout: 5000 }); this.leaveLobby(); return this.setup; }
       catch { this.rejected = false; }
     }
     // nobody waiting: host and advertise. If an older host shows up (both searched at once), join theirs.
@@ -187,7 +204,9 @@ export class OnlineMatch {
           .then(s => { this.leaveLobby(); resolve(s); })
           .catch(async () => {
             this.switching = false; this.rejected = false;
-            await this.host(code); await lobby.track({ id: this.id, name: this.name, code, since, state: 'waiting' });
+            if (this.closed) return;
+            try { await this.host(code); await lobby.track({ id: this.id, name: this.name, code, since, state: 'waiting' }); }
+            catch (e) { if (!this.closed) this.onStatus(`⚠️ ${esc(e.message)} Press Cancel and try again.`); }
           });
       };
       this.checkLobby(waiting);
@@ -201,7 +220,7 @@ export class OnlineMatch {
   close() {
     if (this.closed) return;
     try { this.room?.send({ t: 'bye', from: this.id }); } catch {}
-    this.closed = true; clearInterval(this.pinger);
+    this.closed = true; clearInterval(this.pinger); clearInterval(this.starter);
     this.leaveLobby(); this.leaveRoom();
   }
 
@@ -212,7 +231,14 @@ export class OnlineMatch {
     const setup = { seed, code: this.code, names: { player: this.name, enemy: this.peer.name }, parties: { player: this.party, enemy: this.peer.party } };
     this.send({ t: 'start', to: this.peer.id, setup });
     this.started({ ...setup, mySide: 'player' });
+    clearInterval(this.starter); this.acked = null;
+    this.starter = setInterval(() => {
+      if (this.closed || this.acked === seed || this.setup?.seed !== seed) return clearInterval(this.starter);
+      this.send({ t: 'start', to: this.peer.id, setup });
+    }, 1500);
   }
+  /** Tell the opponent they lost by forfeit (they were away for too long). */
+  claim(reason) { this.send({ t: 'claim', reason }); }
 
   started(setup) {
     this.setup = setup; this.expect = 0; this.buffer.clear(); this.wantRematch = this.peerRematch = false; this.present = true;
@@ -268,7 +294,7 @@ export class OnlineMatch {
       case 'hello':
         if (this.role !== 'host') return;
         if (!this.peer) {
-          this.peer = { id: m.from, name: String(m.name || 'Rival').slice(0, 20), party: m.party };
+          this.peer = { id: m.from, name: cleanName(m.name), party: m.party };
           this.lobby?.untrack();
           this.begin();
         } else if (this.peer.id === m.from && this.setup) {
@@ -277,10 +303,14 @@ export class OnlineMatch {
         return;
       case 'start':
         if (this.role !== 'guest') return;
-        this.peer = { id: m.from, name: m.setup.names.player, party: m.setup.parties.player };
+        if (!m.setup?.names || !m.setup.parties) return;
+        this.peer = { id: m.from, name: cleanName(m.setup.names.player), party: m.setup.parties.player };
+        this.send({ t: 'ack', to: m.from, seed: m.setup.seed });
         if (this.setup && this.setup.seed === m.setup.seed) return;
-        this.started({ ...m.setup, mySide: 'enemy' });
+        this.started({ ...m.setup, names: { player: cleanName(m.setup.names.player), enemy: cleanName(m.setup.names.enemy) }, mySide: 'enemy' });
         return;
+      case 'ack': if (m.from === this.peer?.id) this.acked = m.seed; return;
+      case 'claim': if (this.setup && m.from === this.peer?.id) this.onClaim(String(m.reason || '')); return;
       case 'full': this.rejected = true; return;
       case 'cmd': if (this.setup && m.from === this.peer?.id) this.accept(m.seq, m.cmd); return;
       case 'sync':
@@ -288,7 +318,7 @@ export class OnlineMatch {
         { const log = this.linked.log(); this.send({ t: 'log', since: m.since, cmds: log.slice(m.since) }); }
         return;
       case 'log':
-        if (m.from !== this.peer?.id) return;
+        if (m.from !== this.peer?.id || !Array.isArray(m.cmds)) return;
         m.cmds.forEach((c, i) => this.accept(m.since + i, c));
         return;
       case 'ping':

@@ -57,6 +57,7 @@ export class BattleController {
   allowed(kind, data) { if (!this.guard) return true; const ok = this.guard(kind, data); if (!ok) this.emit('blocked', { kind, data }); return ok; }
 
   dispose() {
+    this.b.aborted = true; // stops an AI turn still running behind the next screen
     removeEventListener('keydown', this.onKey);
     this.v.onClick = this.v.onHover = this.v.onCancel = null;
     $('tip').style.display = 'none';
@@ -319,12 +320,16 @@ export class BattleController {
 
   /** Apply a command received from the remote opponent (queued, so they animate in order). */
   applyRemote(cmd) {
+    // a throw must not poison the queue (every later command would be dropped): it counts as rejected
     return this.remoteQ = this.remoteQ.then(async () => {
       if (this.b.over || this.myTurn()) return false;
       this.busy = true; this.sel = null; this.mode = null; this.refresh();
-      const u = this.b.units[cmd.u];
-      if (u && cmd.t !== 'e') await this.v.focusUnit?.(u);
-      const ok = await this.b.applyCmd(cmd);
+      let ok = false;
+      try {
+        const u = Number.isInteger(cmd?.u) ? this.b.units[cmd.u] : null;
+        if (u && cmd.t !== 'e') await this.v.focusUnit?.(u);
+        ok = await this.b.applyCmd(cmd);
+      } catch (e) { console.warn('remote command failed', e); ok = false; }
       this.busy = false;
       if (this.b.over) { this.emit('over', this.b.result); this.refresh(); this.onFinish(); return ok; }
       if (cmd.t === 'e' && ok) await this.beginLocalTurn(); else this.refresh();
@@ -335,7 +340,9 @@ export class BattleController {
   async beginLocalTurn() {
     await this.v.restoreCamera?.();
     if (this.myTurn()) {
-      await this.onTurn?.(this.b.phase);
+      // hot-seat: keys and clicks behind the pass-the-device curtain must not act for the next player
+      this.busy = true;
+      try { await this.onTurn?.(this.b.phase); } finally { this.busy = false; }
       this.v.banner(this.b.pvp ? `${this.sideName(this.b.phase)}: your turn` : `Round ${this.b.round}`);
       this.emit('playerTurn', this.b.round);
     }

@@ -20,6 +20,11 @@ export function createMemoryStore({ persist = null, clock = () => Date.now() } =
     async putStronghold(s) { db.strongholds[s.owner] = clone(s); save(); },
     async getRaid(id) { return clone(db.raids[id]); },
     async putRaid(r) { db.raids[r.id] = clone(r); save(); },
+    /** Atomically take an open raid for settling: false if another request already did. */
+    async claimRaid(id) { const r = db.raids[id]; if (!r || r.status !== 'open') return false; r.status = 'settling'; save(); return true; },
+    async releaseRaid(id) { const r = db.raids[id]; if (r?.status === 'settling') { r.status = 'open'; save(); } },
+    /** Write a profile only if nobody wrote it since it was read (single-threaded here: always). */
+    async putProfileIf(p) { db.profiles[p.id] = clone(p); save(); return true; },
     async openRaidOf(attacker) { return clone(Object.values(db.raids).find(r => r.attacker === attacker && r.status === 'open')); },
     async raidsAgainst(defender, limit) { return clone(Object.values(db.raids).filter(r => r.defender === defender && r.status === 'done').sort((a, b) => b.finishedAt - a.finishedAt).slice(0, limit)); },
     async recentTargets(attacker, since) { return Object.values(db.raids).filter(r => r.attacker === attacker && r.createdAt >= since).map(r => r.defender); },

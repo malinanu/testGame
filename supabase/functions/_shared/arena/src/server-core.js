@@ -164,7 +164,8 @@ export function createCore(store) {
       const p = await mustProfile(uid), sh = await store.getStronghold(uid);
       const got = E.pendingHarvest(sh.layout, p.harvestedAt, now());
       p.herbs += got.herbs; p.berries += got.berries; p.harvestedAt = now();
-      await store.putProfile(p);
+      // two harvests sent at once must not both pay out
+      if (store.putProfileIf ? !(await store.putProfileIf(p)) : (await store.putProfile(p), false)) fail('Busy, try again.');
       return state(p, { harvested: got });
     },
 
@@ -199,11 +200,13 @@ export function createCore(store) {
     async startRaid(uid, { defenderId, party, consumables = {} } = {}) {
       const p = await mustProfile(uid);
       if (!Array.isArray(party) || party.length !== 4 || party.some(c => !CLASSES[c])) fail('Pick a raiding party of 4.');
-      const open = await store.openRaidOf(uid);
-      if (open) await resolve(open, null, 'abandoned');
       if (defenderId === uid) fail('You cannot raid yourself.');
       const def = await store.getProfile(defenderId), sh = await store.getStronghold(defenderId);
       if (!def || !sh) fail('That stronghold is gone.');
+      const open = await store.openRaidOf(uid);
+      // the same request twice (double click, retry): hand back the raid just opened instead of forfeiting it
+      if (open && open.defender === defenderId && now() - open.createdAt < 15000) return { raid: publicRaid(open), league: E.league(def.rating) };
+      if (open) await resolve(open, null, 'abandoned');
       const cons = {};
       for (const k of Object.keys(E.RAID_CARRY)) {
         const n = Math.max(0, Math.min(E.RAID_CARRY[k], consumables[k] | 0));
@@ -240,6 +243,12 @@ export function createCore(store) {
 
   /** Replays the raid server-side and settles rewards + Elo. `log` null = forfeit. */
   async function resolve(raid, log, reason) {
+    // settle each raid exactly once, even if the same finish request arrives twice in parallel
+    if (store.claimRaid && !(await store.claimRaid(raid.id))) fail('This raid is already settled.');
+    try { return await settle(raid, log, reason); }
+    catch (e) { await store.releaseRaid?.(raid.id); throw e; }
+  }
+  async function settle(raid, log, reason) {
     let result = 'lose', rounds = 0, valid = true;
     if (log) {
       const setup = buildRaid({ attack: raid.attack, defense: raid.defense, seed: raid.seed });

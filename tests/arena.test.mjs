@@ -84,6 +84,28 @@ assert.equal(forged.result, 'lose'); assert.equal(forged.reason, 'invalid');
 assert.ok((await store.recentTargets('u1', t - 1)).includes(target.id), 'raid cooldown recorded');
 console.log('ok forged logs rejected');
 
+{ // abilities a unit doesn't have (or that don't exist) are rejected, not crashes; a raid settles once
+  const t3 = await ok('u1', 'findTarget', { skip: [target.id, t2.id] });
+  const party = ['knight', 'wizard', 'ranger', 'barbarian'];
+  const s3 = await ok('u1', 'startRaid', { defenderId: t3.id, party });
+  const dup = await ok('u1', 'startRaid', { defenderId: t3.id, party });
+  assert.equal(dup.raid.id, s3.raid.id, 'a repeated start returns the same open raid');
+  const k = buildRaid({ attack: s3.raid.attack, defense: s3.raid.defense, seed: s3.raid.seed }).units.findIndex(u => u.cls === 'knight');
+  const bad = await ok('u1', 'finishRaid', { raidId: s3.raid.id, actions: [{ t: 'a', u: k, id: 'fireball', x: 5, y: 5 }] });
+  assert.equal(bad.reason, 'invalid', 'a knight cannot cast fireball');
+  const s4 = await ok('u1', 'startRaid', { defenderId: t3.id, party });
+  const weird = await call('u1', 'finishRaid', { raidId: s4.raid.id, actions: [{ t: 'a', u: 0, id: 'nope', x: 1, y: 1 }, { t: 'a', u: 0, id: '__proto__', x: 1.5, y: 1 }] });
+  assert.ok(!weird.error && weird.reason === 'invalid', 'unknown ability rejected cleanly');
+  const s5 = await ok('u1', 'startRaid', { defenderId: t3.id, party });
+  const g0 = (await store.getProfile('u1')).gold;
+  const both = await Promise.all([call('u1', 'finishRaid', { raidId: s5.raid.id, actions: [] }), call('u1', 'finishRaid', { raidId: s5.raid.id, actions: [] })]);
+  const won = both.filter(r => !r.error);
+  assert.equal(won.length, 1, 'exactly one of two parallel finishes settles');
+  assert.match(both.find(r => r.error).error, /settled/);
+  assert.equal((await store.getProfile('u1')).gold, g0 + won[0].rewards.gold, 'rewards paid once');
+  console.log('ok foreign/unknown abilities rejected, repeated start reuses the raid, parallel finish settles once');
+}
+
 // player vs player: u2 raids u1 and u1's rating moves too
 await ok('u2', 'register', { name: 'Rival' });
 const { rating: r1, defWins: dw1 } = await store.getProfile('u1'); // earlier simulated NPC raids may already count

@@ -194,7 +194,7 @@ class Arena {
       if (painting && t && this.placing < 0) this.paint(t, false);
     };
     $('c').onpointerdown = e => { if (e.button === 0 && !e.shiftKey) painting = true; };
-    addEventListener('pointerup', () => { painting = false; });
+    window.onpointerup = () => { painting = false; }; // assigned, not added: the builder opens many times
     this.renderBuilder();
   }
 
@@ -292,9 +292,13 @@ class Arena {
   }
 
   async attack() {
-    if (!this.target || this.party.length !== 4) return;
-    const r = await this.api.call('startRaid', { defenderId: this.target.id, party: this.party, consumables: this.carry });
+    if (!this.target || this.party.length !== 4 || this.starting) return;
+    this.starting = true; $('r-attack').disabled = true; // one raid per click: a second request would forfeit the first
+    let r;
+    try { r = await this.api.call('startRaid', { defenderId: this.target.id, party: this.party, consumables: this.carry }); }
+    finally { this.starting = false; $('r-attack').disabled = false; }
     if (r?.error) return toast(`⚠ ${esc(r.error)}`);
+    this.ctl?.dispose(); this.ctl = null;
     this.raid = r.raid;
     const setup = buildRaid({ attack: r.raid.attack, defense: r.raid.defense, seed: r.raid.seed });
     const v = this.view;

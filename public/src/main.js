@@ -4,9 +4,13 @@ import { Game } from './game.js';
 
 const tiles = document.getElementById('tiles');
 addEventListener('keydown', e => {
-  const items = [...tiles.children], i = items.indexOf(document.activeElement);
-  const d = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
-  if (d) { e.preventDefault(); items[(i + d + items.length) % items.length].focus(); }
+  const items = [...tiles.children], n = items.length, i = items.indexOf(document.activeElement);
+  // up/down move a whole row of the grid (its column count depends on the window width)
+  const cols = Math.max(1, Math.round(tiles.clientWidth / (items[0]?.offsetWidth || tiles.clientWidth)));
+  const d = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: cols, ArrowUp: -cols }[e.key];
+  if (!d) return;
+  e.preventDefault();
+  items[i < 0 ? (d > 0 ? 0 : n - 1) : (i + d + n * cols) % n].focus();
 });
 tiles.querySelector('.tile')?.focus({ preventScroll: true });
 

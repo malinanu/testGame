@@ -87,6 +87,7 @@ export class ChessScene {
     this.cam = { yaw: 0, yawGoal: 0, pitch: 0.82, dist: 31, target: new THREE.Vector3(0, 0, 0), focus: null };
     this.clock = new THREE.Clock();
     this.tweens = []; this.pieces = new Map(); this.grave = { [WHITE]: [], [BLACK]: [] }; this.extraActors = [];
+    this.gen = 0; this.moving = new Set(); this.loose = []; // see setPosition
     this.vfx = new VFX(this.scene);
     this.vfx.preload(['big_hit_6x5', 'electric_ring_6x5', 'charge_7x6', 'impact_white_6x4', 'lightstreaks_6x5', 'vortex_6x5', 'star_explosion_6x5', 'fire_8x8', 'smoke_8x8', 'explosion_6x5',
       'spark_01_a', 'spark_05_a', 'magic_01_a', 'magic_03_a', 'magic_05_a', 'smoke_01_a', 'smoke_07_a', 'circle_03_a', 'circle_05_a', 'symbol_01_a', 'star_06_a', 'slash_02_a', 'light_01_a']);
@@ -100,7 +101,14 @@ export class ChessScene {
     r.setAnimationLoop(() => this.frame());
   }
 
-  resize() { this.renderer.setSize(innerWidth, innerHeight, false); this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); }
+  resize() {
+    const a = innerWidth / innerHeight, cam = this.camera;
+    this.baseFov ??= cam.fov;
+    // portrait: keep the landscape *horizontal* view (a wider vertical fov) so the whole board fits, without
+    // moving the camera out of the hall
+    cam.fov = a < 1 ? Math.min(80, 2 * THREE.MathUtils.radToDeg(Math.atan(Math.tan(THREE.MathUtils.degToRad(this.baseFov / 2)) / a))) : this.baseFov;
+    this.renderer.setSize(innerWidth, innerHeight, false); cam.aspect = a; cam.updateProjectionMatrix();
+  }
 
   // ---------------------------------------------------------------- environment
   lights() {
@@ -331,8 +339,14 @@ export class ChessScene {
 
   /** Rebuild every piece instantly from a position (new game, undo). captured = {w:[piece ints], b:[...]} */
   setPosition(chess, captured = { [WHITE]: [], [BLACK]: [] }) {
-    for (const pc of this.pieces.values()) this.scene.remove(pc.group);
-    for (const c of [WHITE, BLACK]) for (const pc of this.grave[c]) this.scene.remove(pc.group);
+    // a new game / undo can arrive mid-animation: end that animation (bump the generation, finish its
+    // tweens), and remove the pieces it held and anything it left lying around (a fallen crown)
+    this.gen++;
+    for (const tw of this.tweens.splice(0)) tw.res();
+    const old = [...this.pieces.values(), ...this.moving, ...this.grave[WHITE], ...this.grave[BLACK]];
+    this.moving.clear();
+    for (const o of this.loose.splice(0)) o.removeFromParent();
+    for (const pc of old) { this.scene.remove(pc.group); pc.actor?.meshes.forEach(m => m.material.dispose()); }
     this.pieces.clear(); this.grave = { [WHITE]: [], [BLACK]: [] };
     let v = 0;
     for (const { sq, piece } of chess.pieces()) this.pieces.set(sq, this.makePiece(piece, sq, v++));
@@ -538,9 +552,9 @@ export class ChessScene {
     if (!mover) return;
     const us = color(m.piece);
     const victimSq = m.flags === 'e' ? m.to + (us === WHITE ? -16 : 16) : m.to;
-    const victim = m.captured ? this.pieces.get(victimSq) : null;
-    this.pieces.delete(m.from);
-    if (victim) this.pieces.delete(victimSq);
+    const victim = m.captured ? this.pieces.get(victimSq) : null, gen = this.gen;
+    this.pieces.delete(m.from); this.moving.add(mover);
+    if (victim) { this.pieces.delete(victimSq); this.moving.add(victim); }
     const to = sqPos(m.to);
     let rookJob = null;
     if (m.flags === 'k' || m.flags === 'q') {
@@ -550,9 +564,12 @@ export class ChessScene {
     }
     if (victim) await this.capture(mover, victim, to); else await this.travel(mover, to);
     if (rookJob) await rookJob;
+    if (gen !== this.gen) return; // the board was reset meanwhile: these pieces are gone
+    this.moving.delete(victim);
     mover.sq = m.to;
     let final = mover;
-    if (m.promo) final = await this.promote(mover, m.promo);
+    if (m.promo) { final = await this.promote(mover, m.promo); if (gen !== this.gen) { this.scene.remove(final.group); return; } }
+    this.moving.delete(mover);
     this.pieces.set(m.to, final);
     await this.faceHome(final);
   }
@@ -568,7 +585,7 @@ export class ChessScene {
       king.actor.busy = 0; king.actor.once('Death_B', { hold: true, speed: 0.7 });
       if (king.crown) {
         const cw = king.crown.getWorldPosition(new THREE.Vector3());
-        king.crown.removeFromParent(); this.scene.add(king.crown); king.crown.position.copy(cw); king.crown.scale.setScalar(1);
+        king.crown.removeFromParent(); this.scene.add(king.crown); this.loose.push(king.crown); king.crown.position.copy(cw); king.crown.scale.setScalar(1);
         const land = king.group.position.clone().add(new THREE.Vector3(0.9, 0.12, 0.4));
         this.tween(1.1, k => { king.crown.position.lerpVectors(cw, land, k); king.crown.position.y = cw.y + (land.y - cw.y) * k * k; king.crown.rotation.z = k * 1.4; });
       }
@@ -600,14 +617,31 @@ export class ChessScene {
       return f >= 0 && f < 8 && r >= 0 && r < 8 ? r * 16 + f : null;
     };
     canvas.addEventListener('contextmenu', e => e.preventDefault());
-    canvas.addEventListener('pointerdown', e => { drag = { b: e.button, moved: 0 }; });
-    addEventListener('pointerup', e => { if (drag && drag.moved < 6 && e.target === canvas && drag.b === 0) this.onSquare?.(pick(e)); drag = null; });
+    // touch: one finger orbits after it moves (a still tap picks a square), two fingers pinch-zoom
+    const touches = new Map();
+    let pinch = 0, last = null;
+    canvas.addEventListener('pointerdown', e => {
+      if (e.pointerType === 'touch') { touches.set(e.pointerId, { x: e.clientX, y: e.clientY }); pinch = 0; if (touches.size > 1 && drag) drag.moved = 99; }
+      if (touches.size <= 1) drag = { b: e.button, moved: 0 };
+      last = { x: e.clientX, y: e.clientY };
+    });
+    const lift = e => { touches.delete(e.pointerId); pinch = 0; };
+    addEventListener('pointercancel', e => { lift(e); drag = null; });
+    addEventListener('pointerup', e => { lift(e); if (drag && drag.moved < 6 && e.target === canvas && drag.b === 0) this.onSquare?.(pick(e)); if (!touches.size) drag = null; });
     canvas.addEventListener('pointermove', e => {
+      if (e.pointerType === 'touch' && touches.size > 1) {
+        const t = touches.get(e.pointerId); if (t) { t.x = e.clientX; t.y = e.clientY; }
+        const [a, b] = [...touches.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
+        if (pinch) this.cam.dist = THREE.MathUtils.clamp(this.cam.dist - (d - pinch) * 0.06, 12, 55);
+        pinch = d; return;
+      }
+      // movementX is unreliable for touch: measure from the previous position
+      const mx = last ? e.clientX - last.x : 0, my = last ? e.clientY - last.y : 0; last = { x: e.clientX, y: e.clientY };
       if (drag) {
-        drag.moved += Math.abs(e.movementX) + Math.abs(e.movementY);
+        drag.moved += Math.abs(mx) + Math.abs(my);
         if (drag.b === 2 || (drag.b === 0 && drag.moved > 6)) {
-          this.cam.yawGoal -= e.movementX * 0.006; this.cam.yaw = this.cam.yawGoal;
-          this.cam.pitch = THREE.MathUtils.clamp(this.cam.pitch + e.movementY * 0.004, 0.3, 1.4);
+          this.cam.yawGoal -= mx * 0.006; this.cam.yaw = this.cam.yawGoal;
+          this.cam.pitch = THREE.MathUtils.clamp(this.cam.pitch + my * 0.004, 0.3, 1.4);
         }
       }
       this.onHover?.(pick(e));
@@ -642,7 +676,7 @@ export class ChessScene {
     // camera
     const c = this.cam, goalT = c.focus ? c.focus.target : c.target, goalD = c.focus ? c.focus.dist : c.dist;
     c.curT = (c.curT || c.target.clone()).lerp(goalT, 1 - Math.exp(-raw * 3));
-    c.curD = (c.curD ?? c.dist) + (goalD - (c.curD ?? c.dist)) * (1 - Math.exp(-raw * 3));
+    c.curD = (c.curD ?? goalD) + (goalD - (c.curD ?? goalD)) * (1 - Math.exp(-raw * 3));
     c.yaw += (c.yawGoal - c.yaw) * (1 - Math.exp(-raw * 6));
     const cp = Math.cos(c.pitch);
     this.camera.position.set(c.curT.x + Math.sin(c.yaw) * cp * c.curD, c.curT.y + Math.sin(c.pitch) * c.curD, c.curT.z + Math.cos(c.yaw) * cp * c.curD);

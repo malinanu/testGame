@@ -21,11 +21,13 @@ function fakeSupabase() {
     range(a, b) { this.rng = [a, b]; return this; }
     maybeSingle() { this.single = true; return this; }
     upsert(row) { this.row = row; return this; }
+    update(patch) { this.patch = patch; return this; }
     then(res, rej) { try { res(this.exec()); } catch (e) { rej(e); } }
     exec() {
       const T = (tables[this.t] ||= new Map());
       if (this.row) { T.set(this.row[PK[this.t]], structuredClone(this.row)); return { data: null, error: null }; }
       let rows = [...T.values()].filter(r => this.f.every(f => f(r)));
+      if (this.patch) { for (const r of rows) Object.assign(r, structuredClone(this.patch)); if (!this.cols) return { data: null, error: null }; }
       if (this.opts.head) return { data: null, count: rows.length, error: null };
       if (this.o) { const [k, asc] = this.o; rows.sort((a, b) => (a[k] > b[k] ? 1 : a[k] < b[k] ? -1 : 0) * (asc ? 1 : -1)); }
       if (this.rng) rows = rows.slice(this.rng[0], this.rng[1] + 1);
@@ -64,3 +66,18 @@ t += 4 * 3.6e6;
 s = await ok(u, 'me');
 assert.ok(s.defense, 'simulated defense ran'); assert.ok(s.defenseLog.length >= 1);
 console.log(`ok supabase store (${fin.result} raid, rank ${lb.me.rank}, defense log ${s.defenseLog.length})`);
+
+{ // conditional updates: a raid settles once and two parallel harvests pay once
+  const tgt = await ok(u, 'findTarget', { skip: [target.id] });
+  const r2 = await ok(u, 'startRaid', { defenderId: tgt.id, party: ['knight', 'wizard', 'ranger', 'barbarian'] });
+  const both = await Promise.all([core.handle(u, 'finishRaid', { raidId: r2.raid.id, actions: [] }), core.handle(u, 'finishRaid', { raidId: r2.raid.id, actions: [] })]);
+  assert.equal(both.filter(r => !r.error).length, 1, 'one parallel finish settles');
+  assert.equal(sb.tables.arena_raids.get(r2.raid.id).status, 'done');
+  t += 6 * 3.6e6;
+  const h0 = sb.tables.arena_profiles.get(u).data.herbs;
+  const hv = await Promise.all([core.handle(u, 'harvest'), core.handle(u, 'harvest')]);
+  const good = hv.filter(r => !r.error);
+  assert.equal(good.length, 1, 'one parallel harvest wins'); assert.match(hv.find(r => r.error).error, /try again/i);
+  assert.equal(sb.tables.arena_profiles.get(u).data.herbs, h0 + good[0].harvested.herbs, 'herbs paid once');
+  console.log('ok supabase conditional updates (raid settles once, harvest pays once)');
+}

@@ -35,7 +35,7 @@ export class Game {
     const keys = { KeyW: 'w', ArrowUp: 'w', KeyA: 'a', ArrowLeft: 'a', KeyS: 's', ArrowDown: 's', KeyD: 'd', ArrowRight: 'd' };
     addEventListener('keydown', e => {
       if (keys[e.code]) this.input[keys[e.code]] = 1;
-      if (e.code === 'Space') { this.input.jump = true; e.preventDefault(); }
+      if (e.code === 'Space' && this.state === 'play') { this.input.jump = true; e.preventDefault(); } // the hub page keeps Space for scrolling / buttons
       if (e.code === 'KeyF' && this.state === 'play') this.player.attack();
     });
     addEventListener('keyup', e => { if (keys[e.code]) this.input[keys[e.code]] = 0; if (e.code === 'Space') this.input.jump = false; });

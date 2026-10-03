@@ -58,8 +58,11 @@ export class Battle {
     const human = this.pvp ? this.phase : 'player';
     if (this.phase !== human) return false;
     if (a.t === 'e') { await this.endTurn(); return true; }
-    const u = this.units[a.u];
-    if (!u || u.side !== human) return false;
+    const u = Number.isInteger(a.u) ? this.units[a.u] : null;
+    if (!u || u.side !== human || !Number.isInteger(a.x) || !Number.isInteger(a.y)) return false;
+    // commands can come from another browser or a raid log: only this unit's own abilities, on the board
+    if (a.t === 'a' && (typeof a.id !== 'string' || !Object.hasOwn(ABIL, a.id) || !this.abilities(u).includes(a.id))) return false;
+    if (!this.g.in(a.x, a.y)) return false;
     return a.t === 'm' ? this.move(u, a.x, a.y) : a.t === 'a' ? this.use(u, a.id, a.x, a.y) : false;
   }
 
@@ -79,7 +82,7 @@ export class Battle {
 
   canUse(u, id) {
     const a = ABIL[id];
-    if (!u.alive || this.over) return false;
+    if (!a || !u.alive || this.over) return false;
     if (a.free) return !u.stanced;
     if (a.consumable && !(this.stock(u.side)[a.consumable] > 0)) return false;
     return !u.acted && !(u.cd[id] > 0);
@@ -335,9 +338,9 @@ export class Battle {
     this.startPhase('enemy');
     await this.view.banner?.('Enemy Turn');
     await this.runAI('enemy');
-    if (this.over) return;
+    if (this.over || this.aborted) return; // aborted: the player left mid-turn (browser only)
     await this.endOfTurn('enemy');
-    if (this.over) return;
+    if (this.over || this.aborted) return;
     let changed = false;
     for (let i = 0; i < this.g.fire.length; i++) if (this.g.fire[i]) { this.g.fire[i]--; changed = true; }
     if (changed) await this.view.fire();
@@ -355,7 +358,7 @@ export class Battle {
   async runAI(side) {
     const order = this.alive(side).sort((a, b) => (CLASSES[a.cls].prefer - CLASSES[b.cls].prefer));
     for (const u of order) {
-      if (this.over) return;
+      if (this.over || this.aborted) return;
       if (!u.alive || (u.moved && u.acted)) continue;
       await this.view.focusUnit?.(u);
       await this.aiTurn(u);

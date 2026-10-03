@@ -64,8 +64,19 @@ export class Chess {
     return `${s} ${this.turn === WHITE ? 'w' : 'b'} ${cs} ${this.ep >= 0 ? sqName(this.ep) : '-'} ${this.half} ${this.full}`;
   }
 
-  /** Position identity for repetition (board, side, castling, en passant). */
-  key() { return this.fen().split(' ').slice(0, 4).join(' '); }
+  /**
+   * Position identity for repetition (board, side, castling, en passant). The en-passant square only
+   * counts when a pawn of the side to move could actually capture there (FIDE rule): otherwise every
+   * double push would make an identical position look new.
+   */
+  key() {
+    const f = this.fen().split(' ').slice(0, 4);
+    if (this.ep >= 0) {
+      const from = this.ep + (this.turn === WHITE ? -16 : 16), pawn = this.turn | PAWN;
+      if (![from - 1, from + 1].some(s => !(s & 0x88) && this.board[s] === pawn)) f[3] = '-';
+    }
+    return f.join(' ');
+  }
 
   get(sq) { return this.board[sq]; }
 

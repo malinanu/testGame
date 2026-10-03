@@ -21,7 +21,7 @@ kbd { background: #0004; border: 1px solid #fff4; border-bottom-width: 2px; bord
 .small { font-size: 13px; opacity: .8; }
 
 /* ---------------------------------------------------------------- screens */
-.screen { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px 16px; overflow-y: auto; z-index: 30;
+.screen { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; justify-content: safe center; text-align: center; padding: 24px 16px; overflow-y: auto; z-index: 30;
   background: radial-gradient(ellipse at 50% 40%, #1d2e1f88, #0a120bee 75%); }
 .screen.active { display: flex; }
 .screen.dim { background: #000a; }

@@ -58,6 +58,13 @@ console.log('ok perft (5 positions)');
   const c = new Chess();
   for (let i = 0; i < 2; i++) for (const s of ['Nf3', 'Nf6', 'Ng1', 'Ng8']) c.play(s);
   assert.equal(c.status().reason, 'threefold repetition');
+  // an en-passant square nobody can capture onto does not make 1.e4's position different (FIDE)
+  const e = new Chess(); e.play('e4');
+  for (let i = 0; i < 2; i++) for (const m of ['Nf6', 'Nf3', 'Ng8', 'Ng1']) e.play(m);
+  assert.equal(e.status().reason, 'threefold repetition', 'unusable e.p. square ignored');
+  // ...but a capturable one does
+  const p = new Chess('4k3/8/8/8/3p4/8/4P3/4K3 w - - 0 1'); p.play('e4');
+  assert.match(p.key(), / e3$/, 'capturable e.p. square kept in the key');
   assert.equal(new Chess('8/8/8/4k3/8/8/8/4K2R w - - 100 80').status().reason, 'fifty-move rule');
   assert.equal(new Chess('8/8/8/4k3/8/8/8/4KB2 w - - 0 1').status().reason, 'insufficient material');
   assert.equal(new Chess('8/8/8/4k3/8/8/8/4KR2 w - - 0 1').status().over, false);

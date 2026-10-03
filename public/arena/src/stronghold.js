@@ -1,0 +1,138 @@
+// Strongholds: layout + garrison format, build budget, validation and battle setup.
+// Pure module shared by the client and the server (server replays raids from these exact inputs).
+import { W, H, T, TILE, CLASSES, CLASS_KEYS } from '../../tactics/src/data.js';
+import { Grid, rng, generateMap, N4 } from '../../tactics/src/grid.js';
+import { makeUnit } from '../../tactics/src/battle.js';
+import { TIERS, buildBudget } from './economy.js';
+
+export const ATTACK_ROWS = [0, 1];
+export const DEFENSE_MIN_ROW = 6;
+export const ATTACK_SPAWNS = [[5, 0], [6, 0], [4, 0], [7, 0]];
+export const RAID_ROUNDS = 20;
+export const DEFENDER_TINT = 0xffa98a;
+
+export const BUILD_COST = {
+  [T.GROUND]: 0, [T.GRASS]: 0, [T.OVERGROWN]: 1, [T.BUSH]: 1, [T.BARE]: 1,
+  [T.BOULDER]: 2, [T.TREE]: 2, [T.PILLAR]: 3, [T.CORRUPT]: 3,
+};
+export const PALETTE = [T.GROUND, T.GRASS, T.OVERGROWN, T.BUSH, T.BOULDER, T.PILLAR, T.TREE, T.BARE, T.CORRUPT];
+
+export const BEHAVIORS = {
+  aggressive: { name: 'Aggressive', desc: 'Hunts the nearest raider.' },
+  guard:      { name: 'Guard', desc: 'Never strays more than 2 tiles from its post.' },
+  hold:       { name: 'Hold', desc: 'Never moves; strikes whatever comes in range.' },
+  ambush:     { name: 'Ambush', desc: 'Waits until a raider comes within 4 tiles (or it is hurt), then attacks.' },
+  sniper:     { name: 'Sniper', desc: 'Keeps its distance and prefers cover.' },
+  medic:      { name: 'Medic', desc: 'Stays near the most wounded ally and prioritises heals.' },
+};
+
+export const layoutCost = layout => layout.tiles.reduce((s, t) => s + (BUILD_COST[t] ?? 99), 0);
+
+export function toGrid(layout, seed = 1) {
+  const g = new Grid(), r = rng(seed ^ 0x9e3779b9);
+  for (let i = 0; i < W * H; i++) { g.t[i] = layout.tiles[i]; g.v[i] = Math.floor(r() * 256); }
+  return g;
+}
+
+function flood(g, sx, sy) {
+  const seen = new Uint8Array(W * H), q = [g.i(sx, sy)]; seen[q[0]] = 1;
+  for (let h = 0; h < q.length; h++) {
+    const [x, y] = g.xy(q[h]);
+    for (const [dx, dy] of N4) {
+      const nx = x + dx, ny = y + dy;
+      if (!g.in(nx, ny) || g.blocked(nx, ny)) continue;
+      const k = g.i(nx, ny); if (!seen[k]) { seen[k] = 1; q.push(k); }
+    }
+  }
+  return seen;
+}
+
+/** Returns a list of human-readable problems (empty = valid). Bots skip the budget check. */
+export function validate(layout, garrison, level, { bot = false } = {}) {
+  const errs = [];
+  if (!layout || !Array.isArray(layout.tiles) || layout.tiles.length !== W * H) return ['Layout must have 144 tiles.'];
+  if (layout.tiles.some(t => !(t in BUILD_COST))) errs.push('Layout contains an unknown tile.');
+  const openRow = y => layout.tiles.slice(y * W, y * W + W).every(t => t === T.GROUND || t === T.GRASS);
+  if (!ATTACK_ROWS.every(openRow)) errs.push('The two raider deployment rows must stay open (clearing or grass).');
+  const cost = layoutCost(layout), budget = buildBudget(level);
+  if (!bot && cost > budget) errs.push(`Over budget: ${cost} / ${budget} build points.`);
+  if (!Array.isArray(garrison) || garrison.length !== 4) errs.push('The garrison needs exactly 4 defenders.');
+  else {
+    const g = toGrid(layout), seen = flood(g, ATTACK_SPAWNS[0][0], ATTACK_SPAWNS[0][1]), spots = new Set();
+    garrison.forEach((d, i) => {
+      const tag = `Defender ${i + 1}`;
+      if (!CLASSES[d.cls]) errs.push(`${tag}: unknown class.`);
+      if (!BEHAVIORS[d.behavior]) errs.push(`${tag}: unknown behavior.`);
+      if (!Number.isInteger(d.x) || !Number.isInteger(d.y) || !g.in(d.x, d.y)) { errs.push(`${tag}: not on the board.`); return; }
+      if (d.y < DEFENSE_MIN_ROW) errs.push(`${tag}: must be placed in rows ${DEFENSE_MIN_ROW + 1}-${H}.`);
+      if (g.blocked(d.x, d.y)) errs.push(`${tag}: standing inside ${TILE[g.get(d.x, d.y)].name.toLowerCase()}.`);
+      else if (!seen[g.i(d.x, d.y)]) errs.push(`${tag}: raiders have no path to it (strongholds can't be sealed).`);
+      const key = `${d.x},${d.y}`; if (spots.has(key)) errs.push(`${tag}: shares a tile.`); spots.add(key);
+    });
+  }
+  return errs;
+}
+
+export function applyTier(u, tier = 0) {
+  const t = TIERS[Math.max(0, Math.min(TIERS.length - 1, tier | 0))];
+  u.tier = tier | 0;
+  u.mods.dmg = (u.mods.dmg || 0) + t.dmg;
+  u.mods.acc = (u.mods.acc || 0) + t.acc;
+  u.maxHp += t.hp; u.hp = u.maxHp;
+  return u;
+}
+
+/**
+ * Build the exact starting state of a raid. Client and server must call this with the same inputs.
+ * attack: { party: [cls x4], tiers: {cls: n}, consumables: {potion, ale, tonic}, aura }
+ * defense: { layout, garrison: [{cls, behavior, x, y, tier}], aura }
+ */
+export function buildRaid({ attack, defense, seed }) {
+  const grid = toGrid(defense.layout, seed), units = [];
+  const cons = attack.consumables || {};
+  attack.party.forEach((cls, i) => {
+    const u = applyTier(makeUnit({ cls, gear: [] }, 'player'), attack.tiers?.[cls] || 0);
+    if (cons.ale) u.mods.dmg += 2;
+    if (cons.tonic) u.move += 1;
+    [u.x, u.y] = ATTACK_SPAWNS[i]; u.aura = attack.aura || null;
+    units.push(u);
+  });
+  defense.garrison.forEach(d => {
+    const u = applyTier(makeUnit({ cls: d.cls, gear: [] }, 'enemy', { tint: DEFENDER_TINT }), d.tier || 0);
+    u.x = d.x; u.y = d.y; u.behavior = d.behavior; u.aura = defense.aura || null;
+    units.push(u);
+  });
+  return { grid, units, opts: { seed, consumables: { potion: cons.potion || 0 }, maxRounds: RAID_ROUNDS } };
+}
+
+export function defaultStronghold() {
+  const tiles = new Array(W * H).fill(T.GROUND);
+  const set = (x, y, t) => { tiles[y * W + x] = t; };
+  for (let i = 0; i < W * H; i++) if ((i * 7919) % 5 === 0) tiles[i] = T.GRASS;
+  [[2, 5], [3, 5], [8, 5], [9, 5]].forEach(([x, y]) => set(x, y, T.TREE));
+  [[5, 7], [6, 7], [1, 8]].forEach(([x, y]) => set(x, y, T.BOULDER));
+  [[4, 9], [10, 9], [7, 10]].forEach(([x, y]) => set(x, y, T.BUSH));
+  return {
+    layout: { tiles },
+    garrison: [
+      { cls: 'knight', behavior: 'guard', x: 5, y: 8 },
+      { cls: 'barbarian', behavior: 'ambush', x: 8, y: 8 },
+      { cls: 'ranger', behavior: 'sniper', x: 3, y: 10 },
+      { cls: 'wizard', behavior: 'medic', x: 7, y: 11 },
+    ],
+  };
+}
+
+const BOT_NAMES = ['Grey Ravens', 'Ashen Fangs', 'Crimson Oath', 'Thornwake Co.', 'Iron Lanterns', 'Duskmire Pact', 'Mossback Wardens', 'Hollow Crown'];
+export const BOT_COUNT = BOT_NAMES.length;
+
+/** Procedural stronghold for an NPC guild (fills the matchmaking pool). */
+export function botStronghold(i) {
+  const r = rng(4242 + i * 97), rating = 900 + i * 85;
+  const { grid, eSpawn } = generateMap(7000 + i * 13, Math.min(6, i));
+  const tiles = Array.from(grid.t);
+  for (const y of ATTACK_ROWS) for (let x = 0; x < W; x++) if (tiles[y * W + x] !== T.GRASS) tiles[y * W + x] = T.GROUND;
+  const behaviors = Object.keys(BEHAVIORS), tier = Math.max(0, Math.min(4, Math.floor((rating - 900) / 170)));
+  const garrison = eSpawn.slice(0, 4).map(([x, y]) => ({ cls: CLASS_KEYS[Math.floor(r() * 6)], behavior: behaviors[Math.floor(r() * behaviors.length)], x, y, tier }));
+  return { name: BOT_NAMES[i], rating, level: Math.min(5, 1 + Math.floor(i / 2)), layout: { tiles }, garrison };
+}

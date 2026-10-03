@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Forest Relic Hunt: Wildwood Colony</title>
+<link rel="stylesheet" href="relic.css">
+<script type="importmap">
+{ "imports": { "three": "../vendor/three/three.module.js", "three/addons/": "../vendor/three/addons/" } }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="labels"></div>
+
+<!-- ============================================================ HUD -->
+<div id="hud" class="hidden">
+  <header id="topbar">
+    <div class="tb-left">
+      <div class="res gold" id="t-gold" data-tip="gold"><i>💰</i><b id="gold">0</b><small id="balance"></small></div>
+      <div class="res" id="t-pop" data-tip="pop"></div>
+    </div>
+    <div class="tb-goods" id="goods"></div>
+    <div class="tb-right">
+      <div id="relicbar" data-tip="relics"></div>
+      <div id="clock" data-tip="clock">☀️</div>
+      <div class="speed" id="speed"><button data-s="0" title="Pause (Space)">⏸</button><button data-s="1" class="on" title="Normal (1)">▶</button><button data-s="2" title="Fast (2)">⏩</button><button data-s="4" title="Fastest (3)">⏭</button></div>
+      <button class="tbtn" id="b-stats" title="Statistics (O)">📊</button>
+      <button class="tbtn" id="b-menu" title="Menu (Esc)">☰</button>
+    </div>
+  </header>
+
+  <aside id="quest">
+    <div class="qhead"><span class="qicon">📜</span><b>Objective</b><button id="q-min" title="Hide">–</button></div>
+    <p id="q-text"></p><p id="q-reward"></p>
+  </aside>
+  <div id="feed"></div>
+
+  <div id="minimapwrap"><canvas id="minimap" width="192" height="192"></canvas><div class="mmlegend">Click to move · <kbd>M</kbd></div></div>
+
+  <nav id="buildbar">
+    <div id="cats"></div>
+    <div id="cards"></div>
+  </nav>
+  <div id="tools">
+    <button class="tool" id="tool-road" title="Build roads (R): drag to paint">🛤️<span>Road</span><kbd>R</kbd></button>
+    <button class="tool" id="tool-paved" title="Paved roads (P): 1 brick + 2 gold per tile, carriers walk 50% faster. Drag over dirt roads to pave them.">🧱<span>Paved road</span><kbd>P</kbd></button>
+    <button class="tool" id="tool-demolish" title="Demolish (X)">💥<span>Demolish</span><kbd>X</kbd></button>
+    <button class="tool" id="tool-map" title="Use a Map: reveal the way to a relic">🗺️<span>Map</span><b id="mapcount">0</b></button>
+    <button class="tool hero" id="tool-hero" title="Take the field with your Founder (H)">⚔️<span>Take the field</span><kbd>H</kbd></button>
+  </div>
+
+  <aside id="inspector" class="hidden"></aside>
+  <div id="modehint" class="hidden"></div>
+  <div id="tip"></div>
+
+  <div id="touchpad">
+    <div id="stick"><i></i></div>
+    <div id="tbtns"><button id="t-jump">⤒<small>Jump</small></button><button id="t-use">✋<small>Use</small></button><button id="t-attack">⚔️<small>Attack</small></button></div>
+  </div>
+  <div id="herohud" class="hidden">
+    <div class="hp"><i id="herohp"></i><span id="herohptxt"></span></div>
+    <div id="herocarry"></div>
+    <p class="hk"><kbd>WASD</kbd> move · <kbd>Click</kbd>/<kbd>F</kbd> attack (auto-aim) · <kbd>E</kbd> open / pick up · <kbd>Q</kbd>/<kbd>R</kbd> or right-drag turn · <kbd>Space</kbd> jump · <kbd>H</kbd> town view</p>
+    <div id="heroprompt"></div>
+  </div>
+</div>
+
+<!-- ============================================================ screens -->
+<section id="screen-loading" class="screen active"><h1 class="gtitle">Forest Relic Hunt</h1><p class="sub">Wildwood Colony</p><div class="bar"><i id="loadbar"></i></div><p id="loadtxt">Unpacking the wagons…</p></section>
+
+<section id="screen-title" class="screen">
+  <a class="back" href="../">◀ Games</a>
+  <h1 class="gtitle">Forest Relic Hunt</h1>
+  <p class="sub big">Wildwood Colony</p>
+  <p class="lede">Found a colony in an uncharted forest valley. Build roads and production chains, grow settlers into craftsmen and merchants,
+    and lead your Founder into the wilds to recover the <b>five lost relics</b>. Bind them in the Relic Sanctum to win.</p>
+  <div class="row"><button id="b-continue" class="startbtn">Continue colony ▶</button><button id="b-new" class="btn big">New colony</button><button id="b-help" class="btn big">How to play</button></div>
+  <p id="savedinfo" class="small"></p>
+</section>
+
+<section id="screen-new" class="screen">
+  <button class="back" id="b-newback">◀ Back</button>
+  <h2 class="gtitle sm">Choose your Founder</h2>
+  <p class="lede">Your Founder runs the colony and is the hero who explores the wilds and fights for the relics.</p>
+  <div id="founders"></div>
+  <div class="row seedrow"><span>Difficulty</span><div class="seg" id="diffs"><button data-d="easy" title="More gold, lower upkeep, rarer raids">🌿 Relaxed</button><button data-d="normal" class="on" title="The intended experience">⚖️ Settler</button><button data-d="hard" title="Tight money, early and frequent raids">🔥 Pioneer</button></div></div>
+  <div class="row seedrow"><label>Valley seed <input id="seed" type="number" min="1" max="99999"></label><button id="b-reroll" class="btn">🎲</button></div>
+  <button id="b-start" class="startbtn">Found the colony ▶</button>
+</section>
+
+<section id="screen-help" class="screen dim">
+  <div class="helpbox">
+    <h2>How to play</h2>
+    <div class="hgrid">
+      <div><b>🛤️ Roads & logistics</b>Every building needs a road to the Town Hall or a Warehouse (within its range). Carriers fetch the goods. A ⚠️ icon means "no road".</div>
+      <div><b>⚒️ Production chains</b>Lumberjack → Logs → Sawmill → Planks. Quarry (next to rocks) → Stone → Stonemason → Bricks. Click a building to see what it needs and why it stops.</div>
+      <div><b>🏠 Residents</b>Huts fill up when their <b>basic needs</b> are met (Food + a Market in range). Residents pay taxes and work in your buildings. Short of workers? Build more homes.</div>
+      <div><b>⬆️ Tiers</b>With enough Settlers and a relic you can upgrade huts to Craftsman houses (they want Bread, Textiles, Ale), then Merchant manors (Jewelry, Tools, Chapel).</div>
+      <div><b>⚔️ The Founder</b>Press <kbd>H</kbd> to walk out in third person. Explore the fog, open chests, find ore deposits, and clear guarded lairs. Carry relics back to the Town Hall.</div>
+      <div><b>🔥 Raids</b>After a while, creatures from nearby lairs raid your outskirts at night. Watchtowers repel them; clear the lair to stop them. Pay to put out fires.</div>
+      <div><b>💰 Gold</b>Taxes minus upkeep is shown next to your gold. Keep it positive! The Trading Post lets caravans buy your surplus and sell what you lack.</div>
+      <div><b>🏆 Victory</b>Hold all five relics, reach 250 residents and build the Relic Sanctum.</div>
+    </div>
+    <p class="small"><b>Controls:</b> WASD / edge scroll pan · wheel zoom · Q/E or right-drag rotate · R road · P paved road · C copy hovered building · X demolish · H hero · O statistics · Space pause · 1/2/3 speed · Esc cancel · M minimap</p>
+    <button id="b-helpclose" class="startbtn">Got it</button>
+  </div>
+</section>
+
+<section id="screen-menu" class="screen dim">
+  <div class="menubox">
+    <h2>Paused</h2>
+    <button class="btn big" id="m-resume">Resume</button>
+    <button class="btn big" id="m-save">💾 Save</button>
+    <button class="btn big" id="m-help">❓ How to play</button>
+    <button class="btn big" id="m-sound">🔊 Sound: on</button>
+    <button class="btn big" id="m-quality">🖥️ Graphics: Medium</button>
+    <button class="btn big" id="m-title">Title screen</button>
+    <a class="btn big" href="../">⟵ Games</a>
+  </div>
+</section>
+
+<section id="screen-stats" class="screen dim">
+  <div class="helpbox statsbox">
+    <h2>📊 Statistics</h2>
+    <div id="statstabs" class="seg"><button data-tab="goods" class="on">Goods</button><button data-tab="pop">Population</button><button data-tab="finance">Finance</button></div>
+    <div id="statsbody"></div>
+    <button id="b-statsclose" class="startbtn">Close</button>
+  </div>
+</section>
+
+<section id="screen-victory" class="screen dim">
+  <h1 class="gtitle">The relics are bound!</h1>
+  <p class="lede" id="victext"></p>
+  <div class="row"><button id="b-sandbox" class="startbtn">Keep building</button><button id="b-victitle" class="btn big">Title screen</button></div>
+</section>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>

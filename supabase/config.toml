@@ -1,0 +1,7 @@
+# Minimal Supabase CLI config for Wildwood Arena (run `supabase link --project-ref <ref>` first).
+project_id = "xsjgycaytzqtnvesowdh"
+
+[functions.arena]
+# The function validates the caller's session itself (admin.auth.getUser), so the gateway check is off;
+# this also works with the newer asymmetric JWT signing keys. Anonymous sessions are allowed.
+verify_jwt = false

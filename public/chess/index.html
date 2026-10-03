@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wizard's Chess</title>
+<link rel="stylesheet" href="chess.css">
+<script type="importmap">
+{ "imports": { "three": "../vendor/three/three.module.js", "three/addons/": "../vendor/three/addons/" } }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="hud" class="hidden">
+  <div id="turn"></div>
+  <div id="hint"></div>
+  <div id="ptip"></div>
+  <div id="banner"></div>
+  <aside id="side">
+    <div class="caps"><span>Taken by White</span><div id="capw"></div></div>
+    <div class="caps"><span>Taken by Black</span><div id="capb"></div></div>
+    <ol id="moves"></ol>
+    <div class="row">
+      <button id="b-undo" class="btn" title="Take back (U)">↶ Undo</button>
+      <button id="b-flip" class="btn" title="Flip the view (F)">⇅ Flip</button>
+      <button id="b-menu" class="btn">☰ New</button>
+      <button id="b-help" class="btn" title="How to play (H)">❓ Help</button>
+    </div>
+    <div class="row toggles">
+      <label><input type="checkbox" id="t-cine" checked> Cinematic</label>
+      <label><input type="checkbox" id="t-sound" checked> Sound</label>
+      <label>Speed <select id="t-speed"><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.6">1.6×</option><option value="2.5">2.5×</option></select></label>
+    </div>
+  </aside>
+  <div id="help">Click a piece, then a glowing square · right-drag orbit · wheel zoom · Q/E rotate</div>
+</div>
+
+<section id="screen-loading" class="screen active"><h1>Wizard's Chess</h1><p id="loadtxt">Waking the pieces…</p></section>
+
+<section id="screen-menu" class="screen">
+  <a class="backhub" href="../">⟵ Games</a>
+  <h1>Wizard's Chess</h1>
+  <p class="lede">A living chess set in a torch-lit hall. Pieces march, leap, shoot and cast and when they capture, the board takes the blow.</p>
+  <div class="menu">
+    <div class="opt"><span>Mode</span>
+      <div class="seg" id="o-mode"><button data-v="ai" class="on">vs the Castle (AI)</button><button data-v="local">Two players</button><button data-v="watch">Watch AI vs AI</button></div></div>
+    <div class="opt" id="o-side-row"><span>You play</span>
+      <div class="seg" id="o-side"><button data-v="w" class="on">White</button><button data-v="b">Black</button><button data-v="r">Random</button></div></div>
+    <div class="opt" id="o-level-row"><span>Difficulty</span>
+      <div class="seg" id="o-level"><button data-v="easy">Apprentice</button><button data-v="medium" class="on">Wizard</button><button data-v="hard">Archmage</button></div></div>
+    <button id="b-start" class="btn gold big">Begin the game</button>
+    <button class="btn" id="b-menuhelp">❓ New to chess? How the pieces move</button>
+    <button id="b-resume" class="btn hidden">Resume</button>
+  </div>
+  <div class="cast">
+    <b>The pieces</b>
+    <span>♔ King: armored knight with a crown</span><span>♕ Queen: the witch, who casts lightning</span><span>♖ Rook: a living stone tower</span>
+    <span>♗ Bishop: the archer</span><span>♘ Knight: the leaping barbarian</span><span>♙ Pawn: a spear-carrying rogue</span>
+  </div>
+</section>
+
+<section id="screen-help" class="screen dim">
+  <div class="helpbox">
+    <h2>How to play</h2>
+    <p>Click one of your pieces: the squares it can reach light up (<b style="color:#66d8ff">blue</b> = move, <b style="color:#ff6a5a">red</b> = capture). Click a lit square to move. White moves first; the goal is <b>checkmate</b>: trap the enemy King so it can't escape attack.</p>
+    <div class="pgrid">
+      <div><b>♔ King</b><span>the crowned Knight</span>One square in any direction. Never into danger. Must escape when in <b style="color:#ff6a5a">check</b> (red ring).</div>
+      <div><b>♕ Queen</b><span>the witch</span>Any distance in a straight line or diagonal. The strongest piece.</div>
+      <div><b>♖ Rook</b><span>the stone tower</span>Any distance straight along a row or column.</div>
+      <div><b>♗ Bishop</b><span>the archer</span>Any distance diagonally. It stays on its square colour forever.</div>
+      <div><b>♘ Knight</b><span>the barbarian</span>An "L": 2 squares one way, 1 sideways. The only piece that jumps over others.</div>
+      <div><b>♙ Pawn</b><span>the rogue</span>Forward 1 (or 2 on its first move); captures diagonally forward. On the far side it becomes any piece.</div>
+    </div>
+    <p class="small"><b>Special moves:</b> <i>Castling</i>: move the King two squares toward a Rook and the Rook hops over (only if neither has moved and the King isn't in or passing through check). <i>En passant</i>: a pawn that just jumped 2 can be captured as if it had moved 1. <b>Draws:</b> stalemate (no legal move but not in check), 3× repetition, 50 moves without capture or pawn move, or too little material.</p>
+    <p class="small"><b>Controls:</b> right-drag to orbit · wheel to zoom · Q/E rotate · U undo · F flip · H this help</p>
+    <button id="b-helpclose" class="btn gold">Got it</button>
+  </div>
+</section>
+
+<section id="screen-promo" class="screen dim">
+  <h2>Promote your pawn</h2>
+  <div class="seg big" id="promo"><button data-v="q">♕ Queen</button><button data-v="r">♖ Rook</button><button data-v="b">♗ Bishop</button><button data-v="n">♘ Knight</button></div>
+</section>
+
+<section id="screen-end" class="screen dim">
+  <h1 id="endtitle"></h1>
+  <p class="lede" id="endtext"></p>
+  <div class="row"><button id="b-again" class="btn gold big">Play again</button><button id="b-review" class="btn">Look at the board</button></div>
+</section>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>

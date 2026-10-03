@@ -1,7 +1,7 @@
 # KayKit Forest Games
 
-A game hub and four browser games built with Three.js and free CC0 asset packs: KayKit *Adventurers 2.0*, *Forest Nature Pack 1.0* and
-*Fantasy Weapons Bits 1.0* (Kay Lousberg), plus the *Brackeys VFX bundle* (particles by Picster and Kenney, flipbooks by
+A game hub and four browser games built with Three.js and free CC0 asset packs: KayKit *Adventurers 2.0*, *Forest Nature Pack 1.0*,
+*Fantasy Weapons Bits 1.0*, *Dungeon Pack 1.1*, *Resource Bits 1.0* and *RPG Tools Bits 1.0* (Kay Lousberg), plus the *Brackeys VFX bundle* (particles by Picster and Kenney, flipbooks by
 Thomas Iché, sprite sheets by CodeManu).
 
 ```
@@ -14,11 +14,73 @@ cd public && python3 -m http.server 8123   # or: npx serve public
 | http://localhost:8123/chess/ | **Wizard's Chess**, a living 3D chess set where pieces fight to capture (vs AI, two players, AI vs AI) |
 | http://localhost:8123/arena/ | **Wildwood Arena: Clash of Guilds**, an online build-and-raid tactics game (Supabase backend, offline demo built in) |
 | http://localhost:8123/tactics/ | **Wildwood Tactics**, turn-based squad battles: roguelite campaign, skirmish vs AI, same-screen 2 players, online duels |
-| http://localhost:8123/#relic | **Forest Relic Hunt**, a third-person action game (`?hero=Mage` skips the menu) |
+| http://localhost:8123/relic/ | **Forest Relic Hunt: Wildwood Colony**, an Anno-style colony builder with a hero you can take into the wilds |
 
 The hub art in `public/assets/ui/` (hero portraits and game thumbnails) is rendered from the games themselves with
 `node scripts/make-thumbs.mjs` (needs Playwright and a server on port 8123). The menu font is Lilita One (SIL OFL,
 `public/assets/fonts/`).
+
+## Forest Relic Hunt: Wildwood Colony (`public/relic/`)
+An Anno 1800-style city builder set in an uncharted forest valley, with an adventure layer: your Founder hero
+(one of the five Adventurers) walks out in third person to clear lairs and bring back five lost relics.
+
+**The economy**
+- **Roads and logistics.** Every building needs a road to the Town Hall or a Warehouse within its range. Carriers
+  (villagers with the goods on their heads) walk the roads to fetch output. Storage per good grows with Warehouses.
+- **Production chains**, each with its own building model:
+  - Lumberjack (fells the nearest trees) → Logs → Sawmill → Planks
+  - Forester (replants trees)
+  - Quarry (beside rock) → Stone → Stonemason → Bricks
+  - Hunting Lodge → Game & Berries
+  - Grain Farm → Bakery (Bread) and Brewery (Ale)
+  - Flax Farm → Weaver → Textiles
+  - Iron Mine (on an iron deposit) + Charcoal Kiln → Smelter → Blacksmith → Tools
+  - Gold Mine + Charcoal → Goldsmith → Jewelry
+  - Planks + Textiles → Cartographer → Maps (each one reveals a relic site)
+- **Population tiers.** Settlers live in huts and need Food plus a Market. Craftsmen live in two-storey houses and need
+  Bread, Textiles and a Market, with Ale and a Tavern as luxuries. Merchants live in manors and need Bread, Ale,
+  Textiles, a Tavern and a Chapel, with Jewelry and Tools as luxuries.
+  - Unmet basic needs empty a house.
+  - Luxuries raise happiness and taxes.
+  - Every production building needs workers of a given tier. A shortage cuts its productivity, as in Anno.
+- **Gold** is taxes minus upkeep, shown per minute in the top bar. A Trading Post brings caravans to buy and sell goods.
+- **Territory and fog.** You can build inside the Town Hall's radius, and Outposts extend it. Land outside is fogged
+  until your hero or a building reveals it.
+
+**The adventure**
+- Press **H** for the hero (action-RPG camera: WASD, click to attack with auto-aim, E to open chests or pick up relics).
+- **Lairs** (bandit camps, brute dens, haunted ruins) are guarded. Clearing one pays loot. Five of them hold relics:
+  - Heart of the Grove: lumber, hunting and farms
+  - Runestone: stone and bricks
+  - Ember Crown: smelting and smithing
+  - Tide Pearl: trade prices
+  - Sunforged Sigil: taxes
+- Carry each relic to the Town Hall. Relics also unlock the tiers: Craftsmen need 30 settlers and 1 relic, Merchants
+  need 60 craftsmen and 3 relics.
+- **Raids.** After 25 minutes, lairs near your town raid it at night. Watchtowers repel them, your hero can fight
+  them off, and unguarded buildings catch fire. Pay to put the fire out, or rebuild later.
+- **Victory**: hold all five relics, reach 250 residents and build the **Relic Sanctum**.
+
+**Controls**
+- Camera: WASD or edge scroll to pan, the wheel to zoom (it tilts from street view to overview), Q/E or right-drag to rotate.
+- Building: pick a card in the build menu, then click to place. R paints roads, X demolishes.
+- Space pauses, and 1/2/3 set the game speed. M toggles the minimap.
+- The game autosaves every minute and when you leave. **Continue** restores the colony.
+
+**Code** (`public/relic/src`, the simulation is DOM-free and tested in Node)
+- `data.js`: goods, buildings, tiers, relics, lairs and quests
+- `map.js`: seeded world generation
+- `sim.js`: the deterministic colony simulation (fixed step, save/load)
+- `kit.js`: builds every building from Dungeon walls, floors and props plus Resource and Tool pieces, with
+  procedural roofs, fields and canopies, then merges the geometry per material
+- `world3d.js`: terrain, water, the instanced forest, roads, fog and territory overlay, lairs and deposits
+- `camera.js`: the RTS camera and the hero camera
+- `units.js`: the carriers
+- `hero.js`: the Founder, creatures, raids and relics
+- `ui.js`: the HUD, build menu with rendered thumbnails, inspector and minimap
+- `main.js`: glue, input modes, day/night, VFX and save
+- `tests/colony.test.mjs` covers the map, placement, logistics, chains, workforce, needs and tiers, relics, raids,
+  trade and save/load. A scripted bot (`tests/colony-bot.mjs`) plays two seeds to victory: about 80 and 120 game minutes.
 
 ## Wizard's Chess (`public/chess/`)
 Full-rules chess on a cracked stone board in a torch-lit hall.
@@ -124,6 +186,7 @@ Run `npm test`. It covers:
 - Versus play: two-sided turns, per-side flasks, lockstep determinism, and online duels between two in-process clients (room code, lost-message repair, a full room, rematch, quick-match pairing)
 - The arena server core: economy, validation, daily streak, harvest and craft, upgrades, raids with server replay, forged logs, PvP Elo, simulated defenses, season rollover
 - The Supabase store, against an in-memory fake of supabase-js
+- Wildwood Colony: simulation unit tests plus two full bot playthroughs
 - Whether `_shared` is in sync with `public/`
 
 ## Wildwood Tactics

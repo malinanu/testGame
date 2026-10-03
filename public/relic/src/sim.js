@@ -433,7 +433,7 @@ export class Colony {
 
   tickResidence(b, services, perMin) {
     const tier = TIERS[b.tier], def = BUILDINGS[b.type];
-    if (b.ruined || b.fire) { if (b.fire && b.residents > 0) b.residents = Math.max(0, b.residents - STEP / 3); b.happiness = 0; return 0; }
+    if (b.ruined || b.fire) { if (b.fire && b.residents > 0 && Math.round(this.time / STEP) % 12 === 0) b.residents--; b.happiness = 0; return 0; }
     const has = need => need.good ? (this.stock[need.good] || 0) > 0 : services.some(s => BUILDINGS[s.type].service === need.service && dist(s.cx, s.cy, b.cx, b.cy) <= BUILDINGS[s.type].range);
     const consume = need => {
       if (!need.good || !b.residents) return;

@@ -1,0 +1,252 @@
+// HUD for Wildwood Colony: top resource bar, build menu (with rendered thumbnails), inspector,
+// objective, notifications, minimap and tooltips. Reads the Colony; actions go through `game`.
+import * as THREE from 'three';
+import { GOODS, GOOD_KEYS, TIERS, BUILDINGS, CATEGORIES, RELICS, LAIR_KINDS, W, H } from './data.js';
+import { T, idx } from './map.js';
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+export const costHtml = (cost, c) => Object.entries(cost).map(([k, v]) => {
+  const have = k === 'gold' ? c.gold : c.stock[k] || 0, ok = have >= v;
+  return `<span style="${ok ? '' : 'color:#b0321e'}">${k === 'gold' ? '💰' : GOODS[k].icon}${v}</span>`;
+}).join(' ');
+const fmt = n => Math.abs(n) >= 10000 ? (n / 1000).toFixed(0) + 'k' : Math.round(n).toLocaleString();
+const SHOWN_GOODS = ['logs', 'planks', 'stone', 'bricks', 'food', 'grain', 'bread', 'flax', 'textiles', 'ale', 'charcoal', 'ore', 'iron', 'tools', 'goldore', 'jewelry', 'maps'];
+
+/** Render a small preview image of every building type. */
+export function renderThumbs(kit) {
+  const size = 152, r = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+  r.setSize(size, size * 0.76); r.outputColorSpace = THREE.SRGBColorSpace; r.toneMapping = THREE.ACESFilmicToneMapping;
+  const scene = new THREE.Scene(); scene.background = new THREE.Color(0x8ab878);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x4a6a3a, 1.6));
+  const sun = new THREE.DirectionalLight(0xfff1d0, 2.4); sun.position.set(5, 9, 7); scene.add(sun);
+  const cam = new THREE.PerspectiveCamera(30, 1 / 0.76, 0.1, 200), out = {};
+  for (const type of Object.keys(BUILDINGS)) {
+    if (type === 'road') continue;
+    const g = kit.build(type); scene.add(g);
+    const box = new THREE.Box3().setFromObject(g), sz = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
+    const d = Math.max(sz.x, sz.y * 1.2, sz.z) * 1.9;
+    cam.position.set(c.x + d * 0.6, c.y + d * 0.55, c.z + d * 0.75); cam.lookAt(c.x, c.y * 0.8, c.z);
+    r.render(scene, cam); out[type] = r.domElement.toDataURL('image/webp', 0.8);
+    scene.remove(g);
+  }
+  r.dispose();
+  return out;
+}
+
+export class UI {
+  constructor(game) {
+    this.g = game; this.cat = 'production'; this.feedItems = [];
+    this.minimapBase = null; this.tipEl = $('tip');
+    $('q-min').onclick = () => $('quest').classList.toggle('min');
+    document.querySelectorAll('#speed button').forEach(b => { b.onclick = () => game.setSpeed(+b.dataset.s); });
+    this.bindTips();
+    const mm = $('minimap');
+    const jump = e => { const r = mm.getBoundingClientRect(); game.focusTile((e.clientX - r.left) / r.width * W, (e.clientY - r.top) / r.height * H); };
+    mm.addEventListener('pointerdown', e => { jump(e); mm.onpointermove = jump; });
+    addEventListener('pointerup', () => { mm.onpointermove = null; });
+  }
+
+  get c() { return this.g.colony; }
+
+  // ------------------------------------------------------------------ tooltips
+  bindTips() {
+    document.addEventListener('pointermove', e => {
+      const el = e.target.closest?.('[data-tip]');
+      if (!el) { if (this.tipOwner) { this.tipOwner = null; this.tip(null); } return; }
+      this.tipOwner = el; this.tip(this.tipHtml(el.dataset.tip, el), e);
+    });
+  }
+  tip(html, e) {
+    const t = this.tipEl;
+    if (!html) { t.style.display = 'none'; return; }
+    t.innerHTML = html; t.style.display = 'block';
+    const x = Math.min(innerWidth - t.offsetWidth - 8, e.clientX + 14), y = Math.min(innerHeight - t.offsetHeight - 8, Math.max(8, e.clientY + 16));
+    t.style.left = x + 'px'; t.style.top = y + 'px';
+  }
+  tipHtml(kind, el) {
+    const c = this.c;
+    if (kind === 'gold') return `<b>💰 Gold</b><br>Taxes <span style="color:#2a6a20">+${c.stats.income.toFixed(0)}</span>/min · Upkeep <span style="color:#a02a1a">−${c.stats.upkeep.toFixed(0)}</span>/min<br><span class="dim">Keep the balance positive. Happy residents pay more tax.</span>`;
+    if (kind === 'pop') return `<b>Population ${Math.floor(c.pop.total)}</b><br>` + TIERS.map((t, i) => `${t.icon} ${t.name}: ${Math.floor(c.pop[t.id])} · workers needed ${c.work.demand[i]}${c.work.factor[i] < 1 ? ' ⚠️ shortage' : ''}${c.tierUnlocked(i) ? '' : ' (locked)'}`).join('<br>');
+    if (kind === 'relics') return `<b>Relics ${c.relics.length}/5</b><br>` + RELICS.map(r => `${c.relics.includes(r.id) ? '✅' : c.hero.carry === r.id ? '🎒' : '❔'} ${r.icon} ${r.name}<br><span class="dim">${r.boon}</span>`).join('<br>');
+    if (kind === 'clock') return `<b>Day ${Math.floor(c.time / 240) + 1}</b> · ${c.night ? 'Night: raids come in the dark' : 'Day'}`;
+    if (kind.startsWith('good:')) { const g = kind.slice(5), d = GOODS[g]; return `<b>${d.icon} ${d.name}: ${Math.floor(c.stock[g] || 0)}</b> / ${c.cap}<br><span class="dim">Storage grows with Warehouses.</span>`; }
+    if (kind.startsWith('b:')) return this.buildingTip(kind.slice(2));
+    if (kind.startsWith('need:')) return el.dataset.desc;
+    return '';
+  }
+  buildingTip(type) {
+    const d = BUILDINGS[type], c = this.c;
+    let h = `<b>${d.name}</b><br><span class="dim">${d.desc || ''}</span><br>Cost: ${costHtml(d.cost || {}, c)}`;
+    if (d.upkeep) h += ` · Upkeep 💰${d.upkeep}/min`;
+    if (d.workers) h += `<br>Workers: ${d.workers.n} ${TIERS[d.workers.tier].icon} ${TIERS[d.workers.tier].name}`;
+    if (d.cycle && (d.in || Object.keys(d.out || {}).length)) h += `<br>${Object.entries(d.in || {}).map(([g, n]) => `${n}${GOODS[g].icon}`).join(' + ') || '🌲'} → ${Object.entries(d.out || {}).map(([g, n]) => `${n}${GOODS[g].icon} ${GOODS[g].name}`).join(', ') || 'new trees'} every ${d.cycle}s`;
+    if (d.range) h += `<br>Range ${d.range} tiles`;
+    const err = c.placeError(type, -99, -99);
+    const lock = d.tier && !c.tierUnlocked(d.tier) ? `Requires ${TIERS[d.tier].name}` : d.relics && c.relics.length < d.relics ? `Requires ${d.relics} relics` : '';
+    if (lock) h += `<br><b style="color:#a02a1a">🔒 ${lock}</b>`;
+    void err;
+    return h;
+  }
+
+  // ------------------------------------------------------------------ top bar
+  renderTop() {
+    const c = this.c, bal = c.stats.income - c.stats.upkeep;
+    $('gold').textContent = fmt(c.gold);
+    const b = $('balance'); b.textContent = `${bal >= 0 ? '+' : ''}${bal.toFixed(0)}/min`; b.className = bal >= 0 ? 'pos' : 'neg';
+    $('t-gold').classList.toggle('neg', c.gold < 0);
+    $('t-pop').innerHTML = TIERS.map((t, i) => `<span class="pt ${c.tierUnlocked(i) ? '' : 'lock'}">${t.icon}${Math.floor(c.pop[t.id])}${c.work.factor[i] < 1 ? '⚠️' : ''}</span>`).join('');
+    if (!this.goodEls) {
+      $('goods').innerHTML = SHOWN_GOODS.map(g => `<div class="good" data-tip="good:${g}" id="g-${g}">${GOODS[g].icon}<span></span></div>`).join('');
+      this.goodEls = Object.fromEntries(SHOWN_GOODS.map(g => [g, $('g-' + g)]));
+    }
+    for (const g of SHOWN_GOODS) {
+      const n = Math.floor(c.stock[g] || 0), el = this.goodEls[g];
+      el.lastChild.textContent = n; el.classList.toggle('zero', n === 0); el.classList.toggle('low', n > 0 && n < 4);
+    }
+    $('relicbar').innerHTML = RELICS.map(r => `<span class="${c.relics.includes(r.id) ? 'have' : c.hero.carry === r.id ? 'carry' : ''}">${r.icon}</span>`).join('');
+    const d = c.day; $('clock').textContent = c.night ? '🌙' : d < 0.08 ? '🌅' : d > 0.55 ? '🌇' : '☀️';
+    $('mapcount').textContent = Math.floor(c.stock.maps || 0);
+    const q = c.quest;
+    $('q-text').textContent = q ? q.text : 'All objectives complete. Your colony is yours to grow!';
+    $('q-reward').textContent = q && Object.keys(q.reward).length ? `Reward: ${c.lootText(q.reward)}` : '';
+  }
+
+  // ------------------------------------------------------------------ build menu
+  renderBuild() {
+    const c = this.c, g = this.g;
+    $('cats').innerHTML = CATEGORIES.filter(k => k.id !== 'roads').map(k => `<button data-cat="${k.id}" class="${this.cat === k.id ? 'on' : ''}">${k.icon} ${k.name}</button>`).join('');
+    $('cats').querySelectorAll('button').forEach(b => { b.onclick = () => { this.cat = b.dataset.cat; this.renderBuild(); }; });
+    const types = Object.keys(BUILDINGS).filter(t => BUILDINGS[t].cat === this.cat && BUILDINGS[t].buildable !== false);
+    $('cards').innerHTML = types.map(t => {
+      const d = BUILDINGS[t], locked = (d.tier && !c.tierUnlocked(d.tier)) || (d.relics && c.relics.length < d.relics);
+      const poor = !c.affordable(d.cost || {});
+      return `<div class="bcard ${locked ? 'locked' : ''} ${poor ? 'poor' : ''} ${g.mode === 'build' && g.buildType === t ? 'on' : ''}" data-type="${t}" data-tip="b:${t}">
+        ${locked ? '<span class="lk">🔒</span>' : ''}<img src="${g.thumbs[t] || ''}" alt=""><b>${d.name}</b><div class="cost">${costHtml(d.cost || {}, c)}</div></div>`;
+    }).join('');
+    $('cards').querySelectorAll('.bcard').forEach(el => { el.onclick = () => g.startBuild(el.dataset.type); });
+  }
+
+  // ------------------------------------------------------------------ inspector
+  renderInspector() {
+    const g = this.g, c = this.c, box = $('inspector');
+    const sel = g.selected;
+    if (!sel) { box.classList.add('hidden'); return; }
+    box.classList.remove('hidden');
+    let h = '';
+    if (sel.kind === 'building') {
+      const b = c.buildings.get(sel.id);
+      if (!b) { g.selected = null; box.classList.add('hidden'); return; }
+      const d = BUILDINGS[b.type];
+      h += `<h3>${esc(d.name)}<button data-act="close">✕</button></h3><p class="desc">${esc(d.desc || '')}</p>`;
+      if (b.fire) h += `<div class="status bad">🔥 On fire! It burns down in ${Math.ceil(b.fire)}s.</div>`;
+      else if (b.ruined) h += `<div class="status bad">🏚️ Burned down. Rebuild it to use it again.</div>`;
+      else if (!b.connected && !d.storage) h += `<div class="status bad">⚠️ No road to the Town Hall or a Warehouse within range.</div>`;
+      if (b.tier != null) h += this.residenceHtml(b);
+      else if (d.cycle) h += this.productionHtml(b, d);
+      else h += this.publicHtml(b, d);
+      const repair = c.repairCost(b);
+      h += `<div class="ibtns">`;
+      if (repair) h += `<button class="btn good" data-act="repair">${b.fire ? '🪣 Extinguish' : '🔨 Rebuild'} (${costHtml(repair, c)})</button>`;
+      if (d.cycle) h += `<button class="btn" data-act="pause">${b.paused ? '▶ Resume' : '⏸ Pause'}</button>`;
+      if (b.type !== 'townhall' && b.type !== 'sanctum') h += `<button class="btn bad" data-act="demolish">💥 Demolish</button>`;
+      h += `</div>`;
+    } else if (sel.kind === 'lair') {
+      const l = c.lairs.find(q => q.id === sel.id), k = LAIR_KINDS[l.kind];
+      h += `<h3>${l.relic && !l.relicTaken ? '💎' : '☠️'} ${k.name}<button data-act="close">✕</button></h3>`;
+      h += l.cleared ? `<div class="status ok">Cleared.${l.relic && !l.relicTaken ? ' The relic waits for your Founder to pick it up.' : ''}</div>` : `<div class="status warn">Guarded by ${k.guards.length} creatures. Only your Founder can clear it.</div>`;
+      if (l.relic) { const r = RELICS.find(q => q.id === l.relic); h += `<p class="desc"><b>${r.icon} ${r.name}</b>: ${r.boon}</p>`; }
+      h += `<p class="desc">Loot: ${c.lootText(k.loot)}</p><div class="ibtns"><button class="btn good" data-act="hero">⚔️ Send the Founder (H)</button></div>`;
+    } else if (sel.kind === 'deposit') {
+      const d = c.deposits.find(q => q.id === sel.id);
+      h += `<h3>${d.kind === 'iron' ? '⛏️ Iron' : '🟡 Gold'} deposit<button data-act="close">✕</button></h3><p class="desc">Build ${d.kind === 'iron' ? 'an Iron Mine' : 'a Gold Mine'} exactly on it. It must be inside your territory: build an Outpost nearby if it is not.</p>`;
+    }
+    box.innerHTML = h;
+    box.querySelectorAll('[data-act]').forEach(el => { el.onclick = () => g.inspectorAction(el.dataset.act, el.dataset); });
+  }
+  residenceHtml(b) {
+    const c = this.c, tier = TIERS[b.tier], next = TIERS[b.tier + 1];
+    let h = `<div class="kv"><span>${tier.icon} ${tier.name}</span><b>${Math.floor(b.residents)} / ${tier.cap}</b></div><div class="meter"><i style="width:${b.residents / tier.cap * 100}%"></i></div>`;
+    h += `<div class="kv"><span>Happiness</span><b>${b.happiness}%</b></div><div class="kv"><span>Taxes</span><b>💰${(b.residents * tier.tax * (0.5 + b.happiness / 100)).toFixed(1)}/min</b></div>`;
+    const line = n => { const key = n.good || n.service, ok = b.need[key]; const label = n.good ? `${GOODS[n.good].icon} ${GOODS[n.good].name}` : `${{ market: '🏪 Market', tavern: '🍻 Tavern', chapel: '⛪ Chapel' }[n.service]} in range`; return `<li>${ok ? '✅' : '❌'} ${label}</li>`; };
+    h += `<ul class="needs"><li class="t">Basic needs (more residents)</li>${tier.basic.map(line).join('')}<li class="t">Luxury (happiness, taxes)</li>${tier.luxury.map(line).join('')}</ul>`;
+    if (next) {
+      const err = c.upgradeError(b);
+      h += `<div class="ibtns"><button class="btn good" data-act="upgrade" ${err ? 'disabled' : ''}>⬆️ Upgrade to ${next.name} (${costHtml(next.upgrade, c)})</button></div>${err ? `<p class="desc">${esc(err)}</p>` : ''}`;
+    }
+    return h;
+  }
+  productionHtml(b, d) {
+    const c = this.c, ok = b.status === 'Working';
+    let h = `<div class="status ${ok ? 'ok' : b.prod > 0 ? 'warn' : 'bad'}">${esc(b.status || '…')}</div>`;
+    h += `<div class="kv"><span>Productivity</span><b>${Math.round(b.prod * c.relicMult(b.type) * 100)}%</b></div><div class="meter ${b.prod < 0.5 ? 'bad' : ''}"><i style="width:${Math.min(100, b.prod * 100)}%"></i></div>`;
+    h += `<div class="chain">${Object.entries(d.in || {}).map(([g, n]) => `<span class="g">${n} ${GOODS[g].icon} ${GOODS[g].name}</span>`).join(' + ') || (d.fells ? '<span class="g">🌲 trees</span>' : d.on ? `<span class="g">⛰️ deposit</span>` : d.near?.what === 'rock' ? '<span class="g">🪨 rock</span>' : d.field ? '<span class="g">🌱 field</span>' : '<span class="g">🌲 forest</span>')} → ${Object.entries(d.out).map(([g, n]) => `<span class="g">${n} ${GOODS[g].icon} ${GOODS[g].name}</span>`).join('') || '<span class="g">🌱 saplings</span>'}</div>`;
+    h += `<div class="kv"><span>Cycle</span><b>${d.cycle}s · ${(60 / d.cycle * b.prod * c.relicMult(b.type)).toFixed(1)}/min</b></div>`;
+    if (d.workers) h += `<div class="kv"><span>Workers</span><b>${d.workers.n} ${TIERS[d.workers.tier].icon} (${Math.round(c.work.factor[d.workers.tier] * 100)}% staffed)</b></div>`;
+    if (d.near) h += `<div class="kv"><span>${d.near.what === 'tree' ? 'Trees' : 'Rock'} in range</span><b>${Math.round(b.near * 100)}%</b></div>`;
+    h += `<div class="kv"><span>Waiting for pickup</span><b>${Object.entries(b.out).filter(([, v]) => v > 0).map(([g, v]) => `${v}${GOODS[g].icon}`).join(' ') || '–'}</b></div>`;
+    h += `<div class="kv"><span>Upkeep</span><b>💰${d.upkeep}/min</b></div>`;
+    if (b.relicBoost) h += '';
+    const boost = c.relicMult(b.type); if (boost > 1) h += `<div class="kv"><span>Relic boon</span><b>+${Math.round((boost - 1) * 100)}%</b></div>`;
+    return h;
+  }
+  publicHtml(b, d) {
+    const c = this.c;
+    let h = '';
+    if (d.storage) h += `<div class="kv"><span>Storage</span><b>${d.storage} per good (total ${c.cap})</b></div><div class="kv"><span>Carriers</span><b>${d.carriers}</b></div><div class="kv"><span>Logistics range</span><b>${d.logistic} tiles</b></div>`;
+    if (d.service) { const served = [...c.buildings.values()].filter(r => r.tier != null && Math.hypot(r.cx - b.cx, r.cy - b.cy) <= d.range).length; h += `<div class="kv"><span>Homes in range</span><b>${served}</b></div>`; }
+    if (d.guard) h += `<div class="kv"><span>Guards buildings within</span><b>${d.range} tiles</b></div>`;
+    if (d.territory) h += `<div class="kv"><span>Territory radius</span><b>${d.territory} tiles</b></div>`;
+    if (b.type === 'townhall') {
+      h += `<div class="status ${c.hero.carry ? 'warn' : 'ok'}">${c.hero.carry ? '🎒 Your Founder carries a relic: walk to the Town Hall to enshrine it.' : `Relics enshrined: ${c.relics.length}/5`}</div>`;
+      h += TIERS.map((t, i) => `<div class="kv"><span>${t.icon} ${t.name}</span><b>${c.tierUnlocked(i) ? Math.floor(c.pop[t.id]) : '🔒'}</b></div>`).join('');
+    }
+    if (d.trade) {
+      if (!c.caravan.here) h += `<div class="status warn">🐪 Next caravan in ${Math.ceil(c.caravan.t)}s.</div>`;
+      else {
+        h += `<div class="status ok">🐪 Caravan in town for ${Math.ceil(c.caravan.t)}s.</div><table class="trade">`;
+        for (const g of GOOD_KEYS) { const p = c.prices(g); h += `<tr><td>${GOODS[g].icon} ${GOODS[g].name}</td><td>${Math.floor(c.stock[g])}</td><td><button data-act="buy" data-good="${g}">Buy 5 · ${p.buy * 5}</button></td><td><button data-act="sell" data-good="${g}">Sell 5 · ${p.sell * 5}</button></td></tr>`; }
+        h += '</table>';
+      }
+    }
+    if (d.monument) h += `<div class="status ok">🏆 The Sanctum stands. The Wildwood is yours.</div>`;
+    return h;
+  }
+
+  // ------------------------------------------------------------------ notifications
+  notify(text, kind = 'info') {
+    const el = document.createElement('div'); el.className = `note ${kind}`; el.textContent = text;
+    $('feed').prepend(el);
+    setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 700); }, 6500);
+    while ($('feed').children.length > 5) $('feed').lastChild.remove();
+  }
+
+  // ------------------------------------------------------------------ minimap
+  renderMinimap(camTarget, hero) {
+    const c = this.c, cv = $('minimap'), x = cv.getContext('2d');
+    if (!this.mmImg || this.mmDirty) {
+      this.mmDirty = false;
+      const img = x.createImageData(W, H);
+      for (let i = 0; i < W * H; i++) {
+        let r = 110, g = 170, b = 80;
+        if (c.ground[i] === T.WATER) [r, g, b] = [60, 130, 180]; else if (c.ground[i] === T.ROCK) [r, g, b] = [130, 124, 115]; else if (c.tree[i]) [r, g, b] = [52, 110, 50];
+        if (c.road[i]) [r, g, b] = [200, 170, 120];
+        if (c.occ[i]) [r, g, b] = [230, 120, 80];
+        if (c.owned[i] && !c.occ[i] && !c.road[i]) { r += 18; g += 14; b += 6; }
+        if (!c.fog[i]) [r, g, b] = [40, 48, 56];
+        img.data.set([r, g, b, 255], i * 4);
+      }
+      this.mmImg = img;
+      if (!this.mmCanvas) { this.mmCanvas = document.createElement('canvas'); this.mmCanvas.width = W; this.mmCanvas.height = H; }
+      this.mmCanvas.getContext('2d').putImageData(img, 0, 0);
+    }
+    x.imageSmoothingEnabled = false;
+    x.drawImage(this.mmCanvas, 0, 0, cv.width, cv.height);
+    const s = cv.width / W;
+    for (const l of c.lairs) if (l.found) { x.fillStyle = l.cleared ? '#7be07b' : l.relic && !l.relicTaken ? '#ffd54a' : '#ff5a4a'; x.beginPath(); x.arc((l.x + 1.5) * s, (l.y + 1.5) * s, 4, 0, 7); x.fill(); }
+    for (const d of c.deposits) if (d.found) { x.fillStyle = d.kind === 'iron' ? '#cfe0ff' : '#ffe27a'; x.fillRect(d.x * s, d.y * s, 2 * s, 2 * s); }
+    if (camTarget) { x.strokeStyle = '#fff'; x.lineWidth = 1.5; x.strokeRect(camTarget[0] * s - 14, camTarget[1] * s - 10, 28, 20); }
+    if (hero) { x.fillStyle = '#fff'; x.beginPath(); x.arc(hero[0] * s, hero[1] * s, 3.5, 0, 7); x.fill(); x.strokeStyle = '#000'; x.stroke(); }
+  }
+}
+void idx;

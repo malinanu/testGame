@@ -12,21 +12,12 @@
 <body>
 <canvas id="c"></canvas>
 
-<div id="hud" class="hidden">
-  <div id="hpwrap"><div id="hpbar"></div><span id="hptxt"></span></div>
-  <div id="relics">Relics <b id="relicn">0</b>/5</div>
-  <div id="objective"></div>
-  <div id="compass"><div id="arrow"></div></div>
-  <div id="kills">Defeated <b id="killn">0</b></div>
-  <div id="toast"></div>
-  <div id="help">WASD move · Mouse look (click to capture) · Space jump · LMB / F attack</div>
-</div>
 
 <section id="hub" class="screen">
   <header class="logo"><div class="crest">🌲</div><h1>Wildwood</h1><p>Game Collection · four games in one forest</p></header>
   <nav class="tiles" id="tiles">
-    <a class="tile" href="#relic" data-game="relic"><div class="art" style="background-image:url(assets/ui/game-relic.webp)"><span class="tag act">Action</span></div>
-      <div class="tbody"><b>Forest Relic Hunt</b><span>Run through the haunted forest, fight its creatures and recover 5 lost relics.</span><i class="play">▶ PLAY</i></div></a>
+    <a class="tile" href="relic/" data-game="relic"><div class="art" style="background-image:url(assets/ui/game-relic.webp)"><span class="tag act">Builder</span><span class="tag new">Adventure</span></div>
+      <div class="tbody"><b>Forest Relic Hunt</b><span>Build an Anno-style colony in the Wildwood, grow your town through three tiers and lead your hero to five lost relics.</span><i class="play">▶ PLAY</i></div></a>
     <a class="tile" href="tactics/" data-game="tactics"><div class="art" style="background-image:url(assets/ui/game-tactics.webp)"><span class="tag tac">Tactics</span><span class="tag new">vs AI · 2P · Online</span></div>
       <div class="tbody"><b>Wildwood Tactics</b><span>Turn-based squad battles. Campaign, skirmish vs AI, hot-seat, or duel friends online.</span><i class="play">▶ PLAY</i></div></a>
     <a class="tile" href="arena/" data-game="arena"><div class="art" style="background-image:url(assets/ui/game-arena.webp)"><span class="tag onl">Online</span></div>
@@ -37,20 +28,7 @@
   <p class="foot"><kbd>←</kbd><kbd>→</kbd> choose · <kbd>Enter</kbd> play</p>
 </section>
 
-<section id="menu" class="screen hidden">
-  <a class="back" href="#">◀ Games</a>
-  <h1 class="gtitle">Forest Relic Hunt</h1>
-  <p class="sub">Recover the 5 lost relics from the haunted forest, then escape through the portal.</p>
-  <h3 class="pick">Choose your hero</h3>
-  <div id="heroes"></div>
-  <p id="loading"><span class="spin"></span> Loading the forest…</p>
-  <button id="startbtn" class="startbtn" disabled>Start the hunt ▶</button>
-  <div class="controls">
-    <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move</span><span><kbd>Mouse</kbd> look</span><span><kbd>Space</kbd> jump</span><span><kbd>Click</kbd>/<kbd>F</kbd> attack</span><span>🧭 compass points to the nearest relic</span>
-  </div>
-</section>
 
-<div id="end" class="hidden"><h2 id="endtitle"></h2><p id="endtext"></p><div class="endrow"><button id="again">Play again</button><a class="back2" href="#">Back to games</a></div></div>
 
 <script type="module" src="src/main.js"></script>
 </body>

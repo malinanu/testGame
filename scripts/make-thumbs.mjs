@@ -2,7 +2,7 @@
 // Usage: serve public/ (e.g. `python3 -m http.server 8123 -d public`), then
 //   node scripts/make-thumbs.mjs [http://localhost:8123]
 // Needs Playwright with Chromium (WebGL via SwiftShader is fine).
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { chromium } from 'playwright';
 
 const BASE = process.argv[2] || 'http://localhost:8123';
@@ -57,12 +57,28 @@ for (const [k, d] of Object.entries(portraits)) save(`hero-${k.toLowerCase()}.we
 
 // ---- game thumbnails
 const card = { x: 0, y: 0, width: 1280, height: 740 };
-// Relic Hunt: in-game, third-person
-await page.goto(`${BASE}/index.html?hero=Knight`);
-await page.waitForFunction(() => window.game?.state === 'play', null, { timeout: 120000 });
-await hideUi('#hud');
-await page.waitForTimeout(2500);
-await shot('game-relic.webp', { clip: card });
+// Forest Relic Hunt (Wildwood Colony): a town grown by the test bot, seen at a low Anno-style angle
+const botSrc = readFileSync(new URL('../tests/colony-bot.mjs', import.meta.url), 'utf8').replaceAll("'../public/relic/src/", "'/relic/src/");
+await page.route('**/__bot.mjs', r => r.fulfill({ contentType: 'text/javascript', body: botSrc }));
+await page.goto(`${BASE}/relic/?new&seed=3`);
+await page.waitForFunction(() => window.game?.running, null, { timeout: 180000 });
+await page.evaluate(async () => {
+  const { Bot } = await import('/__bot.mjs');
+  const c = game.colony, bot = new Bot(c), want = (t, n, sc) => { while (c.count(t) < n) if (!bot.place(t, undefined, undefined, sc)) break; };
+  const trees = (x, y) => bot.treesNear(x, y), rocks = (x, y) => -c.nearCount(x + 1, y + 1, { what: 'rock', r: 3 }) * 5;
+  for (let t = 0; t < 1800; t += 5) {
+    want('lumberjack', 2, trees); want('sawmill', 1); want('hunter', 1, trees); want('hut', 10); want('market', 1);
+    want('forester', 1, trees); want('quarry', 1, rocks); want('stonemason', 1); want('hut', 14);
+    if (c.time > 600) { want('warehouse', 1); want('tradepost', 1); want('watchtower', 1); }
+    c.step(5); game.drain();
+  }
+  const th = c.ofType('townhall')[0];
+  game.cam.zoomGoal = game.cam.zoom = 0.22; game.cam.yawGoal = game.cam.yaw = 0.7;
+  game.focusTile(th.cx - 1, th.cy); game.cam.target.copy(game.cam.goal); game.setSpeed(1);
+});
+await hideUi('#hud, #labels');
+await page.waitForTimeout(3000);
+await shot('game-relic.webp', { clip: { x: 160, y: 60, width: 960, height: 560 } });
 
 // Tactics: a skirmish battle board
 await page.goto(`${BASE}/tactics/index.html`);

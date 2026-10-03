@@ -276,6 +276,8 @@ boss, an elite squad called the Hollow Crown.
 **Controls**
 - Click a hero, then click a blue tile to move or a red enemy to attack.
 - 1–4 pick abilities, Esc cancels, Tab selects the next hero, Enter ends the turn.
+- The turn ends by itself once every hero has used its action. Untick **Auto end turn** in the legend to end turns yourself.
+- The camera frames the whole board, both squads included, at the start of each turn.
 - Q/E rotate the camera, WASD pans, right-drag orbits, the wheel zooms.
 
 ### Code (`public/tactics/src`)

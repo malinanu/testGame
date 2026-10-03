@@ -72,6 +72,7 @@ export class View {
   resize() {
     this.renderer.setSize(innerWidth, innerHeight, false);
     this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix();
+    if (this.cam?.fitted) this.fitBoard(this.cam.side); // still at the home framing: keep the whole board in view
   }
 
   // ------------------------------------------------------------ scenery
@@ -601,7 +602,7 @@ export class View {
       c.add(a.root); this.extraActors.push(a);
     });
     for (let k = 0; k < 6; k++) { const b = this.clone(['Bush_2_C', 'Bush_4_C', 'Tree_3_A'][k % 3], k % 3 === 2 ? 0.8 : 1.1); const ang = k * 1.05 + 0.2; b.position.set(Math.cos(ang) * 8, 0, Math.sin(ang) * 8); c.add(b); }
-    Object.assign(this.cam, { target: new THREE.Vector3(0, 0.8, 0), dist: 11, pitch: 0.42, orbit: 0.05 });
+    Object.assign(this.cam, { target: new THREE.Vector3(0, 0.8, 0), dist: 11, pitch: 0.42, orbit: 0.05, fitted: false });
   }
 
   clearCamp() {
@@ -612,16 +613,46 @@ export class View {
   /** Decorative board for menus. */
   showBackdrop(grid) {
     this.clearCamp(); this.clearUnits(); this.buildBoard(grid); this.setHighlights([]); this.setHover(null);
-    Object.assign(this.cam, { target: new THREE.Vector3(0, 0, 0), dist: 34, pitch: 0.75, orbit: 0.06 });
+    Object.assign(this.cam, { target: new THREE.Vector3(0, 0, 0), dist: 34, pitch: 0.75, orbit: 0.06, fitted: false });
   }
 
   battleCamera(side = 'player', smooth = false) {
-    // aim a little toward the viewer's own side so their heroes are not hidden behind the bottom HUD panel;
     // the 'enemy' side (player 2 in versus play) looks at the board from the opposite end
-    const flip = side === 'enemy', yaw = flip ? Math.PI : 0;
+    const yaw = side === 'enemy' ? Math.PI : 0;
     this.camHome = null;
-    Object.assign(this.cam, { target: new THREE.Vector3(0, 0, flip ? 5.5 : -5.5), dist: 30, pitch: 0.98, orbit: 0, yawGoal: yaw });
+    Object.assign(this.cam, { orbit: 0, yawGoal: yaw });
     if (!smooth) this.cam.yaw = yaw;
+    this.fitBoard(side);
+  }
+
+  /**
+   * Frame the whole board: aim at its centre and pick the smallest distance at which every board corner
+   * (and the far row at unit height) lands inside the part of the screen the HUD leaves free: the top bar
+   * and hint above, the unit panel and legend below.
+   */
+  fitBoard(side = 'player') {
+    const c = this.cam, cam = (this.fitCam ||= new THREE.PerspectiveCamera()).copy(this.camera);
+    const yaw = side === 'enemy' ? Math.PI : 0, pitch = this.camera.aspect < 1 ? 1.32 : 0.98, cp = Math.cos(pitch); // phones: steeper, so the board fits the band between the HUD panels
+    const hw = W * S / 2, hh = H * S / 2, v = new THREE.Vector3(), target = new THREE.Vector3(0, 0, 0);
+    const pts = [[-hw, 0, -hh], [hw, 0, -hh], [-hw, 0, hh], [hw, 0, hh], [-hw, 2.2, -hh], [hw, 2.2, -hh], [-hw, 2.2, hh], [hw, 2.2, hh]];
+    // the free band between the HUD panels actually on screen (desktop: top bar + hint; phones: also the
+    // roster strip and legend), with room kept for the unit panel, which only appears once a hero is picked
+    const ih = innerHeight || 1, phone = this.camera.aspect < 1;
+    let top = ih * 0.1, bottom = ih * (phone ? 0.7 : 0.86);
+    for (const sel of ['#topbar', '#roster', '#legend', '#hint', '#unitpanel', '#endturn']) {
+      const r = document.querySelector(sel)?.getBoundingClientRect();
+      if (!r || !r.height || r.width > innerWidth * 0.9 && sel === '#roster' && !phone) continue;
+      if (r.bottom < ih * 0.45) top = Math.max(top, r.bottom + 6);
+      else if (r.top > ih * 0.55 && (phone || r.left < innerWidth * 0.75 && r.right > innerWidth * 0.25)) bottom = Math.min(bottom, r.top - 6);
+    }
+    const yMax = 1 - 2 * top / ih, yMin = 1 - 2 * bottom / ih;
+    let dist = 90;
+    for (let d = 12; d <= 90; d += 0.5) {
+      cam.position.set(Math.sin(yaw) * cp * d, Math.sin(pitch) * d, -Math.cos(yaw) * cp * d);
+      cam.lookAt(target); cam.updateMatrixWorld(); cam.updateProjectionMatrix();
+      if (pts.every(([x, y, z]) => { v.set(x, y, z).project(cam); return v.x > -0.95 && v.x < 0.95 && v.y > yMin && v.y < yMax; })) { dist = d; break; }
+    }
+    Object.assign(c, { target, dist, pitch, side, fitted: true });
   }
 
   // ------------------------------------------------------------ input & loop
@@ -658,26 +689,26 @@ export class View {
         const t = touches.get(e.pointerId), dx = e.clientX - t.x, dy = e.clientY - t.y; t.x = e.clientX; t.y = e.clientY;
         if (touches.size > 1) {
           const [a, b] = [...touches.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
-          if (pinch) this.cam.dist = THREE.MathUtils.clamp(this.cam.dist - (d - pinch) * 0.06, 12, 48);
+          if (pinch) { this.cam.dist = THREE.MathUtils.clamp(this.cam.dist - (d - pinch) * 0.06, 12, 90); this.cam.fitted = false; }
           pinch = d; return;
         }
         if (!drag) return;
         drag.moved += Math.abs(dx) + Math.abs(dy);
         if (drag.moved > 10) {
           this.cam.yawGoal -= dx * 0.008; this.cam.yaw = this.cam.yawGoal;
-          this.cam.pitch = THREE.MathUtils.clamp(this.cam.pitch + dy * 0.005, 0.35, 1.35);
+          this.cam.pitch = THREE.MathUtils.clamp(this.cam.pitch + dy * 0.005, 0.35, 1.35); this.cam.fitted = false;
           return;
         }
       } else if (drag) {
         drag.moved += Math.abs(e.movementX) + Math.abs(e.movementY);
         if (drag.b === 2 || (drag.b === 0 && drag.moved > 6 && e.buttons & 1 && e.shiftKey)) {
           this.cam.yawGoal -= e.movementX * 0.006; this.cam.yaw = this.cam.yawGoal;
-          this.cam.pitch = THREE.MathUtils.clamp(this.cam.pitch + e.movementY * 0.004, 0.35, 1.35);
+          this.cam.pitch = THREE.MathUtils.clamp(this.cam.pitch + e.movementY * 0.004, 0.35, 1.35); this.cam.fitted = false;
         }
       }
       this.onHover?.(pick(e), e);
     });
-    canvas.addEventListener('wheel', e => { this.cam.dist = THREE.MathUtils.clamp(this.cam.dist + e.deltaY * 0.02, 12, 48); }, { passive: true });
+    canvas.addEventListener('wheel', e => { this.cam.dist = THREE.MathUtils.clamp(this.cam.dist + e.deltaY * 0.02, 12, 70); this.cam.fitted = false; }, { passive: true });
     addEventListener('keydown', e => {
       if (e.target.tagName === 'INPUT') return;
       this.keys[e.code] = true;
@@ -709,6 +740,7 @@ export class View {
     if (c.orbit) c.yawGoal += raw * c.orbit;
     const pan = 14 * raw, fx = -Math.sin(c.yaw), fz = Math.cos(c.yaw);
     if (!c.orbit && !document.querySelector('.screen.active')) {
+      if (this.keys.KeyW || this.keys.ArrowUp || this.keys.KeyS || this.keys.ArrowDown || this.keys.KeyA || this.keys.ArrowLeft || this.keys.KeyD || this.keys.ArrowRight) c.fitted = false;
       if (this.keys.KeyW || this.keys.ArrowUp) { c.target.x += fx * pan; c.target.z += fz * pan; }
       if (this.keys.KeyS || this.keys.ArrowDown) { c.target.x -= fx * pan; c.target.z -= fz * pan; }
       if (this.keys.KeyA || this.keys.ArrowLeft) { c.target.x += fz * pan; c.target.z -= fx * pan; }

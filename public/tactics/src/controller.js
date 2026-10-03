@@ -39,7 +39,9 @@ export class BattleController {
     this.localSides = localSides; this.names = names || { player: 'You', enemy: enemyName || 'Enemy' };
     this.onCommand = onCommand; this.onTurn = onTurn; this.remoteQ = Promise.resolve();
     this.sel = null; this.mode = null; this.busy = false; this.hoverT = null; this.danger = false;
-    this.listeners = {}; this.guard = null; this.hintOverride = null;
+    this.listeners = {}; this.guard = null; this.hintOverride = null; this.autoHint = null;
+    const cb = $('autoend');
+    if (cb) { cb.checked = this.autoEndOn(); cb.onchange = () => { try { localStorage.setItem('wwt-autoend', cb.checked ? '1' : '0'); } catch {} if (cb.checked) this.maybeAutoEnd(); else this.cancelAutoEnd(); }; }
     this.v.onClick = t => this.click(t);
     this.v.onHover = (t, e) => this.hover(t, e);
     this.v.onCancel = () => this.cancel();
@@ -58,6 +60,7 @@ export class BattleController {
 
   dispose() {
     this.b.aborted = true; this.disposed = true; // stops an AI turn / animation still running behind the next screen
+    clearTimeout(this.autoT); this.autoT = null; this.autoHint = null;
     removeEventListener('keydown', this.onKey);
     this.v.onClick = this.v.onHover = this.v.onCancel = null;
     $('tip').style.display = 'none';
@@ -79,7 +82,32 @@ export class BattleController {
     this.select(list.find(u => this.ready(u)) || null, true);
   }
 
+  // ---------------------------------------------------------------- automatic end of turn
+  autoEndOn() { try { return localStorage.getItem('wwt-autoend') !== '0'; } catch { return true; } }
+  /** Every living hero has used its action (or none can do anything at all). */
+  allSpent() { const mine = this.players(); return mine.length > 0 && (mine.every(u => u.acted) || !mine.some(u => this.ready(u))); }
+  /** After the last hero acts: show "ending turn…", then end it unless the player picks a hero meanwhile. */
+  maybeAutoEnd() {
+    this.cancelAutoEnd();
+    if (this.disposed || !this.autoEndOn() || this.busy || !this.myTurn() || this.b.over || !this.allSpent()) return;
+    if (this.guard && !this.guard('endTurn')) return; // the tutorial decides when turns end (no "blocked" nag)
+    const stamp = `${this.b.round}|${this.b.phase}|${this.b.actions.length}`;
+    this.autoHint = '✅ All heroes have acted: ending the turn… <span class="autoend-note">(pick a hero to keep moving)</span>';
+    this.renderHint(); $('endturn')?.classList.add('pulse');
+    this.autoT = setTimeout(() => {
+      this.autoT = null; this.autoHint = null;
+      if (this.disposed) return;
+      if (stamp === `${this.b.round}|${this.b.phase}|${this.b.actions.length}` && !this.busy && this.myTurn() && this.allSpent()) this.endTurn();
+      else this.renderHint();
+    }, 900 / Math.max(1, this.v.speed || 1));
+  }
+  cancelAutoEnd() {
+    if (this.autoT) clearTimeout(this.autoT);
+    if (this.autoT || this.autoHint) { this.autoT = null; this.autoHint = null; this.renderHint(); }
+  }
+
   select(u, auto = false) {
+    if (!auto) this.cancelAutoEnd();
     if (!auto && u && !this.allowed('select', u)) return;
     this.sel = u; this.mode = null; this.refresh();
     if (u && !auto) this.emit('select', u);
@@ -87,6 +115,7 @@ export class BattleController {
   cancel() { if (this.mode) { this.mode = null; this.refresh(); this.emit('mode', null); } }
 
   setMode(id) {
+    this.cancelAutoEnd();
     const u = this.sel;
     if (!u || this.busy || !this.myTurn() || !this.b.canUse(u, id)) return;
     if (!this.allowed('mode', id)) return;
@@ -145,6 +174,7 @@ export class BattleController {
 
   /** One sentence telling the player what to do right now. */
   hintText() {
+    if (this.autoHint) return this.autoHint;
     if (this.hintOverride) return this.hintOverride;
     const b = this.b, u = this.sel;
     if (b.over) {
@@ -314,6 +344,7 @@ export class BattleController {
     if (u?.hidden) this.emit('hidden', u);
     if (this.b.over) { this.emit('over', this.b.result); return this.onFinish(); }
     if (!this.ready(this.sel)) this.selectNext(); else this.refresh();
+    this.maybeAutoEnd();
   }
 
   /** Pass commands made on this screen to the opponent (online play). */
@@ -354,6 +385,7 @@ export class BattleController {
   }
 
   async endTurn() {
+    this.cancelAutoEnd();
     if (this.busy || !this.myTurn()) return;
     if (!this.allowed('endTurn')) return;
     this.busy = true; this.mode = null; this.refresh();
@@ -385,7 +417,7 @@ export class BattleController {
   key(e) {
     if (this.busy || e.target?.tagName === 'INPUT') return;
     if (e.key >= '1' && e.key <= '5' && this.sel) { const id = this.b.abilities(this.sel)[+e.key - 1]; if (id) this.setMode(id); }
-    else if (e.code === 'Escape') this.cancel();
+    else if (e.code === 'Escape') { this.cancelAutoEnd(); this.cancel(); }
     else if (e.code === 'Tab') { e.preventDefault(); this.selectNext(); }
     else if (e.code === 'Enter') this.endTurn();
     else if (e.code === 'KeyT') this.toggleDanger();

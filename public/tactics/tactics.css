@@ -259,3 +259,7 @@ body:has(.screen.active:not(.bottom)) #labels { display: none; }
 }
 /* touch has no hover: a tooltip would pop up on every tap and cover the panel */
 @media (pointer: coarse) { #tip { display: none !important; } }
+
+#legend .autoend { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+#legend .autoend input { accent-color: var(--gold); margin: 0; }
+#hint .autoend-note { opacity: .75; font-size: .9em; }

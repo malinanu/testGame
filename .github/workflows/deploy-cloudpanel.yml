@@ -71,7 +71,8 @@ jobs:
         uses: easingthemes/ssh-deploy@v5.0.3
         with:
           SSH_PRIVATE_KEY: ${{ secrets.CLOUDPANEL_SSH_KEY }}
-          ARGS: "-rlzv --omit-dir-times --no-perms --delete"
+          ARGS: "-rlzv --no-times --no-perms --no-owner --no-group --delete"
+          EXCLUDE: "/.well-known/"
           SOURCE: "public/"
           REMOTE_HOST: ${{ secrets.CLOUDPANEL_HOST }}
           REMOTE_USER: ${{ secrets.CLOUDPANEL_USER }}

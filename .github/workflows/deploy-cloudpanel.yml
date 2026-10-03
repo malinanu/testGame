@@ -60,5 +60,5 @@ jobs:
           SOURCE: "public/"
           REMOTE_HOST: ${{ secrets.CLOUDPANEL_HOST }}
           REMOTE_USER: ${{ secrets.CLOUDPANEL_USER }}
-          SSH_PORT: ${{ secrets.CLOUDPANEL_PORT || '22' }}
+          REMOTE_PORT: ${{ secrets.CLOUDPANEL_PORT || 22 }}
           TARGET: "/home/${{ secrets.CLOUDPANEL_USER }}/htdocs/${{ secrets.CLOUDPANEL_DOMAIN }}/"

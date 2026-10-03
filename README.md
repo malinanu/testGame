@@ -81,8 +81,9 @@ An Anno 1800-style city builder set in an uncharted forest valley, with an adven
 - **Touch screens:** one finger pans, pinch zooms, and a two-finger twist rotates. Tap to select or place, and drag
   to paint roads. ✕ stops the current tool. In hero mode a joystick and Attack / Use / Jump buttons appear.
 - **Graphics** (menu): Low, Medium or High sets the pixel ratio, shadow quality, decor, shadow casters, view
-  distance, and (on Low) a lighter tree model for distant forest chunks. If the first seconds run under 25 fps,
-  the game drops to Low by itself.
+  distance, and (on Low) a lighter tree model for distant forest chunks. Phones and 4-core machines start on
+  Low. Until you pick a level yourself, the game steps down one level whenever a few seconds of play average
+  under 36 fps.
 
 **Code** (`public/relic/src`, the simulation is DOM-free and tested in Node)
 - `data.js`: goods, buildings, tiers, relics, lairs and quests

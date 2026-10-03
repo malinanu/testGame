@@ -11,6 +11,9 @@ import { Units } from './units.js';
 import { Adventure, HEROES } from './hero.js';
 import { VFX } from '../../chess/src/vfx.js';
 import { SFX } from '../../chess/src/sfx.js';
+import { Ambience } from './ambience.js';
+import { MATS } from './kit.js';
+import { CONSTRUCT_TIME } from './world3d.js';
 
 const $ = id => document.getElementById(id);
 const SAVE_KEY = 'wwc-save-v1';
@@ -53,6 +56,7 @@ class Game {
     this.world = new World3D(this.scene, this.assets, colony);
     this.fx = new VFX(this.scene, '../assets/vfx/'); this.fx.preload(['smoke_01_a', 'spark_01_a', 'fire_8x8', 'star_06_a', 'smoke_07_a']);
     this.units = new Units(this);
+    this.ambience = new Ambience(this);
     this.adv = new Adventure(this);
     this.thumbs ||= renderThumbs(this.world.kit);
     this.ui = new UI(this);
@@ -314,20 +318,24 @@ class Game {
   drain() {
     const c = this.colony, ev = c.events; c.events = [];
     for (const e of ev) {
+      // a lumberjack walks over and chops before the tree falls
+      if (e.type === 'tree' && !e.on && e.by) { const job = this.units.chop(e.by, e.x, e.y); if (job) { e.deferred = true; job.onFelled = () => this.world.setTree(e.x, e.y, false); } }
       this.world.handle(e);
       switch (e.type) {
         case 'notify': this.ui.notify(e.text, e.kind); break;
         case 'trip': this.units.trip(e.trip); break;
+        case 'built': case 'upgraded': { const b = c.buildings.get(e.id); if (b) this.units.build(b, CONSTRUCT_TIME); break; }
+        case 'produced': { const b = c.buildings.get(e.id); if (b) this.ambience.produced(b, new THREE.Vector3(...this.worldOf(b))); break; }
         case 'raid': this.adv.spawnRaid(e.raid); this.sfx.doom(); break;
         case 'raidEnd': this.adv.endRaid(e.raid, e.outcome); if (e.outcome === 'tower') this.sfx.twang(); break;
         case 'fire': this.sfx.thud(true); break;
         case 'tree': if (!e.on && e.by) this.sfx.noise?.(0.25, { freq: 900, gain: 0.04 }); break;
-        case 'built': case 'removed': case 'upgraded': case 'territory': case 'fog': case 'road': this.ui.mmDirty = true; this.buildDirty = true; break;
+        case 'removed': case 'territory': case 'fog': case 'road': this.ui.mmDirty = true; this.buildDirty = true; break;
         case 'relic': this.buildDirty = true; break;
         case 'quest': this.sfx.chime(); break;
         case 'victory': this.victory(); break;
       }
-      if (e.type === 'built' || e.type === 'upgraded') this.ui.mmDirty = true;
+      if (e.type === 'built' || e.type === 'upgraded') { this.ui.mmDirty = true; this.buildDirty = true; }
     }
   }
   victory() {
@@ -337,24 +345,24 @@ class Game {
   }
 
   // ------------------------------------------------------------------ per-frame visuals
-  dayNight() {
-    const c = this.colony, d = c.day, a = d * Math.PI * 2;
-    // sun arcs from east (dawn) over the top; night = moonlight
-    const day = Math.max(0, Math.sin(a * 0.5 / 0.62 * Math.PI / Math.PI) ), isNight = c.night;
+  dayNight(dt) {
+    const c = this.colony, d = c.day, a = d * Math.PI * 2, isNight = c.night;
     const elev = isNight ? 0.6 : 0.25 + Math.sin(Math.min(1, d / 0.62) * Math.PI) * 0.9;
     const t = this.cam.target;
     this.sun.position.set(t.x + Math.cos(a) * 60, 30 + elev * 60, t.z + Math.sin(a) * 40 + 30);
     this.sun.target.position.copy(t);
     const span = THREE.MathUtils.clamp(this.cam.dist * 0.8, 40, 110), sc = this.sun.shadow.camera;
     if (sc.right !== span) { sc.left = sc.bottom = -span; sc.right = sc.top = span; sc.far = 300; sc.updateProjectionMatrix(); }
-    const dusk = d > 0.5 && d < 0.66 ? (d - 0.5) / 0.16 : d > 0.95 || d < 0.06 ? 0.5 : 0;
-    const sunCol = new THREE.Color(0xfff1d0).lerp(new THREE.Color(0xffa060), dusk);
-    const target = isNight ? { sun: 0.55, hemi: 0.55, sky: 0x2a3a5a, col: 0x9ab0ff } : { sun: 2.5 - dusk * 0.8, hemi: 1.15 - dusk * 0.3, sky: dusk ? 0xe8b890 : 0xa9d8cf, col: sunCol.getHex() };
-    const k = 0.03;
+    const dusk = d > 0.5 && d < 0.62 ? (d - 0.5) / 0.12 : d > 0.95 || d < 0.06 ? 0.6 : 0;
+    const sunCol = new THREE.Color(0xfff1d0).lerp(new THREE.Color(0xff9a50), dusk);
+    const target = isNight ? { sun: 0.32, hemi: 0.32, sky: 0x18223a, col: 0x8aa0ff, glow: 1 }
+      : { sun: 2.5 - dusk * 1.0, hemi: 1.15 - dusk * 0.35, sky: dusk ? 0xe0a880 : 0xa9d8cf, col: sunCol.getHex(), glow: dusk * 0.6 };
+    const k = 1 - Math.exp(-dt * 1.4); // converge in real time, whatever the frame rate
     this.sun.intensity += (target.sun - this.sun.intensity) * k; this.hemi.intensity += (target.hemi - this.hemi.intensity) * k;
     this.sun.color.lerp(new THREE.Color(target.col), k);
     this.scene.background.lerp(new THREE.Color(target.sky), k); this.scene.fog.color.copy(this.scene.background);
-    void day;
+    this.glow = (this.glow || 0) + (target.glow - (this.glow || 0)) * k;
+    MATS.window().color.copy(new THREE.Color(0x2a2018).lerp(new THREE.Color(0xffc45a), this.glow));
   }
 
   smoke(dt) {
@@ -423,7 +431,8 @@ class Game {
     this.fx.update(raw);
     this.smoke(raw * (this.speed ? 1 : 0));
     this.cam.update(raw, !!document.querySelector('.screen.active'));
-    this.dayNight();
+    this.dayNight(raw);
+    this.ambience.update(raw);
     this.labelsUpdate();
     if ((this.uiT -= raw) <= 0) {
       this.uiT = 0.25; this.ui.renderTop();
@@ -468,6 +477,8 @@ $('b-helpclose').onclick = () => { if (game.running) show('none'); else titleScr
 $('m-resume').onclick = () => { show('none'); game.setSpeed(game.prevSpeed || 1); };
 $('m-save').onclick = () => { game.save(); show('none'); game.setSpeed(game.prevSpeed || 1); };
 $('m-help').onclick = () => show('help');
+const soundLabel = () => { $('m-sound').textContent = game.sfx.muted ? '🔇 Sound: off' : '🔊 Sound: on'; };
+$('m-sound').onclick = () => { game.sfx.setMuted(!game.sfx.muted); soundLabel(); }; soundLabel();
 $('m-title').onclick = () => { game.save(true); titleScreen(); };
 $('b-sandbox').onclick = () => { show('none'); game.setSpeed(1); };
 $('b-victitle').onclick = () => titleScreen();

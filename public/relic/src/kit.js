@@ -41,7 +41,9 @@ export const ROOFS = {
 const plain = (key, color, extra = {}) => mat(key, () => new THREE.MeshStandardMaterial({ color, roughness: 0.9, ...extra }));
 export const MATS = {
   plaster: () => plain('plaster', 0xeadcc4), timber: () => plain('timber', 0x5a3a22), cloth: c => plain('cloth' + c, c, { side: THREE.DoubleSide }),
-  soil: () => plain('soil', 0x6b4a2e), dark: () => plain('dark', 0x2a2420), glow: c => mat('glow' + c, () => new THREE.MeshBasicMaterial({ color: c })),
+  soil: () => plain('soil', 0x6b4a2e), dark: () => plain('dark', 0x2a2420),
+  /** Shared by every lit window: main.js warms its colour at night. */
+  window: () => mat('window', () => new THREE.MeshBasicMaterial({ color: 0x2a2018, side: THREE.DoubleSide })), glow: c => mat('glow' + c, () => new THREE.MeshBasicMaterial({ color: c })),
 };
 
 // ------------------------------------------------------------------ builder helpers
@@ -74,20 +76,30 @@ export class Kit {
    * A box-shaped house body made of wall modules: nx × nz modules, `floors` storeys.
    * sides: { front, back, left, right } → arrays of wall piece names per module (bottom floor), upper floors use windows.
    */
+  /** A wall module; open windows get a pane that glows at night. */
+  wall(g, name, x, y, z, ry, tint) {
+    this.add(g, 'dun:' + name, x, y, z, ry, K, tint);
+    if (name === 'wall_window_open' || name === 'wall_arched') {
+      const pane = new THREE.Mesh(new THREE.PlaneGeometry(1.5 * K, (name === 'wall_arched' ? 2.4 : 1.5) * K), MATS.window());
+      pane.position.set(x, y + (name === 'wall_arched' ? 1.4 : 2.05) * K, z); pane.rotation.y = ry; g.add(pane);
+    }
+  }
+
   body(g, { nx = 1, nz = 1, floors = 1, cx = 0, cz = 0, tint = null, front = null, door = true, floor = 'floor_wood_large', upper = 'wall_window_closed' }) {
     const w = nx * MOD, d = nz * MOD;
+    const up = (i, f) => upper === 'wall_window_closed' && (i + f) % 2 ? 'wall_window_open' : upper; // mix shutters and lit windows
     for (let f = 0; f < floors; f++) {
       const y = f * MOD;
       for (let i = 0; i < nx; i++) {
         const x = cx - w / 2 + MOD * (i + 0.5);
-        const fr = f === 0 ? (front?.[i] || (door && i === Math.floor(nx / 2) ? 'wall_doorway' : 'wall_window_open')) : upper;
-        this.add(g, 'dun:' + fr, x, y, cz + d / 2 - 0.2 * K, 0, K, tint);
-        this.add(g, 'dun:' + (f === 0 ? 'wall' : upper), x, y, cz - d / 2 + 0.2 * K, Math.PI, K, tint);
+        const fr = f === 0 ? (front?.[i] || (door && i === Math.floor(nx / 2) ? 'wall_doorway' : 'wall_window_open')) : up(i + 1, f);
+        this.wall(g, fr, x, y, cz + d / 2 - 0.2 * K, 0, tint);
+        this.wall(g, f === 0 ? 'wall' : up(i, f), x, y, cz - d / 2 + 0.2 * K, Math.PI, tint);
       }
       for (let j = 0; j < nz; j++) {
         const z = cz - d / 2 + MOD * (j + 0.5);
-        this.add(g, 'dun:' + (f === 0 ? (j % 2 ? 'wall' : 'wall_window_open') : upper), cx + w / 2 - 0.2 * K, y, z, Math.PI / 2, K, tint);
-        this.add(g, 'dun:' + (f === 0 ? 'wall' : 'wall_window_closed'), cx - w / 2 + 0.2 * K, y, z, -Math.PI / 2, K, tint);
+        this.wall(g, f === 0 ? (j % 2 ? 'wall' : 'wall_window_open') : up(j, f), cx + w / 2 - 0.2 * K, y, z, Math.PI / 2, tint);
+        this.wall(g, f === 0 ? 'wall' : 'wall_window_closed', cx - w / 2 + 0.2 * K, y, z, -Math.PI / 2, tint);
       }
       // timber band between floors (the half-timbered Anno look)
       if (f > 0) this.box(g, w + 0.1, 0.22, d + 0.1, cx, y, cz, MATS.timber());
@@ -381,6 +393,18 @@ export class Kit {
     this.add(g, 'dun:chest_gold', 1.5, 0, 1.5, -0.4, 0.45); this.add(g, 'res:Gold_Bars_Stack_Small', -1.5, 0, 1.5, 0, 0.7); this.add(g, 'dun:candle_triple', 1.7, 0, 0.2, 0, 0.5);
   }
   b_generic(g, W, D) { this.smallHouse(g, { roof: ROOFS.red() }); void W; void D; }
+
+  /** Construction site: timber frame with scaffold walls over the footprint. */
+  scaffold(type) {
+    const def = BUILDINGS[type], g = new THREE.Group();
+    const W = def.size[0] * TILE - 0.6, D = def.size[1] * TILE - 0.6, h = Math.min(6, 2.6 + def.size[0] * 0.6);
+    for (const [x, z] of [[-W / 2, -D / 2], [W / 2, -D / 2], [-W / 2, D / 2], [W / 2, D / 2]]) this.post(g, x, z, h, 0.18);
+    for (const y of [h * 0.45, h]) for (const [x, z, w, d] of [[0, -D / 2, W, 0.12], [0, D / 2, W, 0.12], [-W / 2, 0, 0.12, D], [W / 2, 0, 0.12, D]]) this.box(g, w, 0.12, d, x, y, z, MATS.timber());
+    const s = Math.min(W, D) / 4.2;
+    this.add(g, 'dun:wall_scaffold', 0, 0, D / 2 - 0.3, 0, s * 0.9); this.add(g, 'dun:wall_doorway_scaffold', W / 2 - 0.3, 0, 0, Math.PI / 2, s * 0.9);
+    this.add(g, 'res:Wood_Planks_Stack_Small', -W / 2 + 0.6, 0, D / 2 + 0.2, 0.3, 0.6); this.add(g, 'res:Stone_Bricks_Stack_Small', W / 2 - 0.5, 0, -D / 2 + 0.6, 0, 0.6);
+    return g;
+  }
 
   /** Ruined look: drop the roof, darken, scatter rubble. */
   ruin(g) {

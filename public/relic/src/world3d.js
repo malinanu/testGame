@@ -8,6 +8,7 @@ import { T, idx, rng } from './map.js';
 import { Kit, MATS } from './kit.js';
 
 export const tileToWorld = (x, y) => [(x - W / 2 + 0.5) * TILE, (y - H / 2 + 0.5) * TILE];
+export const CONSTRUCT_TIME = 2.6;  // seconds of scaffolding before a new building rises
 export const worldToTile = (wx, wz) => [Math.floor(wx / TILE + W / 2), Math.floor(wz / TILE + H / 2)];
 const TREE_MODELS = ['Tree_1_A', 'Tree_2_A', 'Tree_3_A', 'Tree_4_A', 'Tree_1_B', 'Tree_2_B', 'Tree_3_B', 'Tree_4_B'];
 const hash = (x, y, k = 0) => { let h = (x * 374761393 + y * 668265263 + k * 1442695041) | 0; h = (h ^ (h >>> 13)) * 1274126177 | 0; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
@@ -303,7 +304,17 @@ export class World3D {
     for (let j = 0; j < b.h; j++) for (let i = 0; i < b.w; i++) this.clearDecor(b.x + i, b.y + j);
     const smokes = []; model.traverse(o => { if (o.userData.smoke) smokes.push(o); });
     this.buildingObjs.set(b.id, { obj: model, smokes });
-    if (animate) { model.scale.set(1, 0.01, 1); this.anims.push({ t: 0, dur: 0.9, fn: k => model.scale.set(1, 0.01 + 0.99 * (1 - (1 - k) ** 3), 1) }); }
+    if (animate === 'construct') {
+      // scaffold first, then the building rises out of it
+      const scaf = this.kit.bake(this.kit.scaffold(b.type)); scaf.position.copy(model.position); scaf.rotation.y = model.rotation.y; this.root.add(scaf);
+      model.scale.set(1, 0.01, 1); model.visible = false;
+      this.anims.push({ t: 0, dur: CONSTRUCT_TIME + 0.9, fn: k => {
+        const t = k * (CONSTRUCT_TIME + 0.9) - CONSTRUCT_TIME;
+        if (t < 0) { scaf.scale.y = Math.min(1, k * 6); return; }
+        if (scaf.parent) { this.root.remove(scaf); model.visible = true; }
+        const r = Math.min(1, t / 0.9); model.scale.set(1, 0.01 + 0.99 * (1 - (1 - r) ** 3), 1);
+      } });
+    } else if (animate) { model.scale.set(1, 0.01, 1); this.anims.push({ t: 0, dur: 0.9, fn: k => model.scale.set(1, 0.01 + 0.99 * (1 - (1 - k) ** 3), 1) }); }
     return model;
   }
   facing(b) {
@@ -322,11 +333,11 @@ export class World3D {
   // ------------------------------------------------------------------ events & animation
   handle(e) {
     switch (e.type) {
-      case 'tree': this.setTree(e.x, e.y, e.on); break;
+      case 'tree': if (!e.deferred) this.setTree(e.x, e.y, e.on); break;
       case 'road': this.roadsDirty = true; if (e.on) this.clearDecor(e.x, e.y); break;
-      case 'built': this.addBuilding(this.c.buildings.get(e.id)); this.syncFeatures(); break;
+      case 'built': this.addBuilding(this.c.buildings.get(e.id), 'construct'); this.syncFeatures(); break;
       case 'removed': this.removeBuilding(e.id); this.syncFeatures(); break;
-      case 'upgraded': case 'ruined': case 'repaired': { const b = this.c.buildings.get(e.id); if (b) this.addBuilding(b, e.type !== 'ruined'); break; }
+      case 'upgraded': case 'ruined': case 'repaired': { const b = this.c.buildings.get(e.id); if (b) this.addBuilding(b, e.type === 'upgraded' ? 'construct' : e.type !== 'ruined'); break; }
       case 'fog': case 'territory': this.fogDirty = true; break;
       case 'found': case 'lairCleared': case 'relicTaken': case 'chest': case 'mapUsed': this.syncFeatures(); break;
     }
